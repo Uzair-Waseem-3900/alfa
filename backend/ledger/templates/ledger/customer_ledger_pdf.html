@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Ledger_{{ ledger.customer_code }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* page_margin/body_padding come from backend.pdf_utils — shared across
+     every PDF template, tune them there rather than per-template. */
+  @page { margin: {{ page_margin }}; }
+
+  body { font-family: Arial, sans-serif; font-size: 11px; color: #1a1a1a; padding: {{ body_padding }}; }
+
+  /* Header */
+  .header {
+    display: flex; align-items: center;
+    border-bottom: 2px solid #1a1a1a; padding-bottom: 14px; margin-bottom: 18px;
+  }
+  .header-logo { flex: 1 1 0; display: flex; align-items: center; justify-content: flex-start; }
+  .header-logo img { max-height: 50px; max-width: 140px; object-fit: contain; }
+  .header-center { flex: 1 1 0; text-align: center; }
+  .company-name  { font-size: 18px; font-weight: 900; letter-spacing: 1px; white-space: nowrap; }
+  .company-sub   { font-size: 10px; color: #555; margin-top: 2px; }
+  .ledger-title  { flex: 1 1 0; text-align: right; }
+  .ledger-title h2 { font-size: 16px; font-weight: 700; }
+  .ledger-title .sub { font-size: 10px; color: #555; margin-top: 3px; }
+
+  /* Customer info block */
+  .info-grid {
+    display: flex; gap: 40px;
+    background: #f7f7f7; border: 1px solid #e0e0e0; border-radius: 4px;
+    padding: 12px 16px; margin-bottom: 18px;
+  }
+  .info-item .label { font-size: 9px; text-transform: uppercase; color: #888; letter-spacing: 0.8px; }
+  .info-item .value { font-size: 12px; font-weight: 600; margin-top: 2px; }
+
+  /* Date range bar */
+  .date-bar {
+    font-size: 10px; color: #555; margin-bottom: 14px;
+    padding: 6px 12px; background: #fffbe6; border-left: 3px solid #f0ad00;
+  }
+
+  /* Ledger table */
+  .ledger-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  .ledger-table thead tr { background: #1a1a1a; color: #fff; }
+  .ledger-table thead th {
+    padding: 7px 10px; text-align: left; font-size: 10px;
+    font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .ledger-table thead th.right  { text-align: right; }
+  .ledger-table thead th.center { text-align: center; }
+
+  .ledger-table tbody tr { border-bottom: 1px solid #ececec; }
+  .ledger-table tbody tr:nth-child(even) { background: #f9f9f9; }
+  .ledger-table tbody td { padding: 7px 10px; font-size: 11px; vertical-align: top; }
+  .ledger-table tbody td.right  { text-align: right; }
+  .ledger-table tbody td.center { text-align: center; }
+  .ledger-table tbody td.mono   { font-family: "Courier New", monospace; font-size: 10px; }
+
+  .entry-sale     .debit  { color: #b91c1c; font-weight: 600; }
+  .entry-payment  .credit { color: #15803d; font-weight: 600; }
+  .entry-return   .credit { color: #1d4ed8; font-weight: 600; }
+  .entry-advance  .credit { color: #7c3aed; font-weight: 600; }
+
+  .badge {
+    display: inline-block; padding: 1px 7px; border-radius: 8px;
+    font-size: 9px; font-weight: 700; text-transform: uppercase;
+  }
+  .badge-sale     { background: #fee2e2; color: #b91c1c; }
+  .badge-payment  { background: #dcfce7; color: #15803d; }
+  .badge-return   { background: #dbeafe; color: #1d4ed8; }
+  .badge-advance  { background: #ede9fe; color: #7c3aed; }
+
+  /* Closing balance */
+  .closing-box {
+    display: flex; justify-content: flex-end; margin-bottom: 24px;
+  }
+  .closing-inner {
+    width: 280px; border: 1px solid #1a1a1a; border-radius: 4px; overflow: hidden;
+  }
+  .closing-inner table { width: 100%; border-collapse: collapse; }
+  .closing-inner td { padding: 8px 14px; font-size: 12px; }
+  .closing-inner .closing-row { background: #1a1a1a; }
+  .closing-inner .closing-row td { color: #fff; font-weight: 700; font-size: 13px; }
+  .closing-inner .right { text-align: right; }
+
+  /* Zero display */
+  .zero { color: #ccc; }
+</style>
+</head>
+<body>
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">
+      {% if company_logo %}<img src="{{ company_logo }}" alt="{{ company_name }}">{% endif %}
+    </div>
+    <div class="header-center">
+      <div class="company-name">{{ company_name }}</div>
+      <div class="company-sub">Customer Account Ledger</div>
+    </div>
+    <div class="ledger-title">
+      <h2>CUSTOMER LEDGER</h2>
+      <div class="sub">Generated: {{ generated_at }}</div>
+    </div>
+  </div>
+
+  <!-- Customer info -->
+  <div class="info-grid">
+    <div class="info-item">
+      <div class="label">Customer Name</div>
+      <div class="value">{{ ledger.customer_name }}</div>
+    </div>
+    <div class="info-item">
+      <div class="label">Customer Code</div>
+      <div class="value">{{ ledger.customer_code }}</div>
+    </div>
+    <div class="info-item">
+      <div class="label">Currency</div>
+      <div class="value">{{ currency }}</div>
+    </div>
+    <div class="info-item">
+      <div class="label">Account Since</div>
+      <div class="value">{{ ledger.created_at|date:"d M Y" }}</div>
+    </div>
+  </div>
+
+  <!-- Date range notice -->
+  {% if date_from or date_to %}
+  <div class="date-bar">
+    Period:
+    {% if date_from %}From {{ date_from }}{% endif %}
+    {% if date_to %}To {{ date_to }}{% endif %}
+    &nbsp;|&nbsp; Opening Balance: {{ currency }} {{ opening_balance|floatformat:2 }}
+  </div>
+  {% else %}
+  <div class="date-bar">
+    Period: Complete Ledger History &nbsp;|&nbsp; Opening Balance: {{ currency }} {{ opening_balance|floatformat:2 }}
+  </div>
+  {% endif %}
+
+  <!-- Ledger table -->
+  <table class="ledger-table">
+    <thead>
+      <tr>
+        <th style="width:9%">Date</th>
+        <th style="width:30%">Details</th>
+        <th style="width:14%">Reference</th>
+        <th style="width:8%" class="center">Type</th>
+        <th style="width:13%" class="right">Debit ({{ currency }})</th>
+        <th style="width:13%" class="right">Credit ({{ currency }})</th>
+        <th style="width:13%" class="right">Balance ({{ currency }})</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in entries %}
+      <tr class="entry-{{ entry.entry_type }}">
+        <td>{{ entry.date|date:"d M Y" }}</td>
+        <td>{{ entry.details }}</td>
+        <td class="mono">{{ entry.reference }}</td>
+        <td class="center">
+          <span class="badge badge-{{ entry.entry_type }}">{{ entry.entry_type }}</span>
+        </td>
+        <td class="right debit">
+          {% if entry.debit %}
+            {{ entry.debit|floatformat:2 }}
+          {% else %}
+            <span class="zero">—</span>
+          {% endif %}
+        </td>
+        <td class="right credit">
+          {% if entry.credit %}
+            {{ entry.credit|floatformat:2 }}
+          {% else %}
+            <span class="zero">—</span>
+          {% endif %}
+        </td>
+        <td class="right"><strong>{{ entry.balance|floatformat:2 }}</strong></td>
+      </tr>
+      {% empty %}
+      <tr>
+        <td colspan="7" style="text-align:center;color:#aaa;padding:20px;">
+          No transactions found for the selected period.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Closing balance -->
+  <div class="closing-box">
+    <div class="closing-inner">
+      <table>
+        <tr class="closing-row">
+          <td>Closing Balance</td>
+          <td class="right">{{ currency }} {{ closing_balance|floatformat:2 }}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+
+</body>
+</html>

@@ -1,0 +1,63 @@
+/* Ledger specific styles */
+.ledger-table {
+    font-feature-settings: "tnum" 1;
+}
+
+.ledger-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.ledger-table .balance-positive {
+    color: #dc2626;
+    font-weight: 600;
+}
+
+.ledger-table .balance-zero {
+    color: #94a3b8;
+}
+
+.ledger-table .balance-negative {
+    color: #16a34a;
+    font-weight: 600;
+}
+
+/* Monospace for financial figures */
+.ledger-table .mono {
+    font-family: 'JetBrains Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
+}
+
+/* Entry type badges */
+.ledger-badge-purchase {
+    background-color: #fef2f2;
+    color: #dc2626;
+}
+
+.ledger-badge-payment {
+    background-color: #f0fdf4;
+    color: #16a34a;
+}
+
+.ledger-badge-return {
+    background-color: #eff6ff;
+    color: #2563eb;
+}
+
+.ledger-badge-advance {
+    background-color: #fef3c7;
+    color: #d97706;
+}
+
+/* Closing balance summary */
+.closing-balance-summary {
+    background: linear-gradient(to right, #f8fafc, #f1f5f9);
+    border-top: 2px solid #e2e8f0;
+}
+
+/* Responsive filter bar */
+@media (max-width: 768px) {
+    .ledger-filter-bar {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 0.5rem;
+    }
+}

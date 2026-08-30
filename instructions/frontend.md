@@ -1,0 +1,22 @@
+# Frontend rules
+
+Act as a **15+ year senior React + Vite engineer**. Modern React + Tailwind,
+clean reusable production code. Enforced constraints, not style guidance —
+read before touching any page/component/hook/service (see `CLAUDE.md`).
+Grounded in this codebase's real patterns; inconsistencies are named, not
+hidden — follow the named canonical pattern.
+
+- **Dates**: never `new Date().toISOString().slice(...)`/`.split('T')[0]` for a default — it's UTC and silently returns yesterday's date for early-morning local users (real incident: a payment ledger entry landed a day early). Use `todayLocalDate()` from `utils/helpers.js`. Still unmigrated: `CreateInvoicePage.jsx`, `RecurringExpensePostDuesPage.jsx`, `GrossProfitTrendChart.jsx`. `toLocaleDateString()` for *display* of a stored date is unaffected — safe.
+- **Folders**: `pages/<app>/`, `services/<app>Api.js`, `hooks/use<App>.js` per app. `components/<app>/` only when sub-components are reused 2+ places. `components/ui/*` is the only live shared system — never `components/common/*` (legacy).
+- **API clients**: object literal namespaced by sub-resource, one-line methods through `utils/api.js`'s `api` — never call axios/fetch directly. Two identical-shape resources → factory function (`buildXApi(basePath)`, see `ledgerApi.js`). Query strings built inline (`new URLSearchParams(...)`) per method — factor into a local `buildQuery()` once a file repeats it several times (see `dataEntryApi.js`).
+- **Hooks**: `usePaginatedList` → `{data, meta, loading, initialLoading, error, filters, setFilters, page, setPage, refetch}`. `initialLoading` (true until first fetch resolves) gates the full-page spinner; `loading` gates in-place refetches (tab/filter change) — not every wrapper hook forwards it yet, don't half-do it. Non-list responses may hand-roll state instead (`useLedgerDetail`). Mutation hooks: `mutating` state + try/catch/finally + `refetch()` + step back a page if you deleted the last row. Prefer an optional arg defaulting to old behavior over forking a hook/component (`useCRUD`, `useLedgerList(filters, api=ledgerApi)`).
+- **Permissions**: `ProtectedRoute` only checks auth, never role. Role check is inline per page (`user?.role === 'admin' || 'superuser'`; superuser pages: `!== 'superuser'`). Nav-hide (`navigation.js`'s `adminOnly`/`superuserOnly`) AND page-level redirect are both required, always. On fail, prefer `<Navigate to="/dashboard" replace />`.
+- **List/detail pages**: role check → data hook → `initialLoading` spinner → header (`text-3xl font-bold` + subtext) → `{error && <InlineAlert onRetry={refetch}/>}` → filter bar → table (`EmptyState` if empty) → `{meta.totalPages>1 && <Pagination/>}` → create/edit `Modal`. Fixed-subset pages (e.g. Assets excludes disposed) must force-merge the base filter on every filter change.
+- **Forms**: controlled `formData` via `useState`. Either form-owned validation+errors (reusable forms, e.g. `CustomerForm.jsx`) or page-owned `fieldErrors` (one-off forms) — don't add a third shape. No shared field-error extractor exists yet (each file hand-rolls `data?.x?.[0]`) — consider adding one to `errorMessage.js` if you're touching 2+ in one change. Always `toast.error(extractErrorMessage(error, fallback))` in catches, never raw `error.message`. PropTypes on `components/*`, not on `pages/*`.
+- **Shared components**: `LoadingSpinner`, `InlineAlert`, `EmptyState`, `ConfirmDialog` (destructive actions only — never `window.confirm()`).
+- **Toasts**: `useToast()` → `toast.success/error/...`. Error toasts stay up longer (8s) than success/info (5-6s) by design — don't override per call site. Toast every mutation's outcome.
+- **Styling**: semantic Tailwind tokens only (`text-error-600`, etc. — never raw hex). Prefer `<Card>` over hand-rolled card divs. `space-y-6` page spacing. Currency: `Rs. {fmt(value)}` for display, `(PKR)` only as an input-label suffix. `fmt()` is duplicated in ~40 files — prefer a shared one.
+- **Animation**: `framer-motion` only for route transitions, `Card` hover, and `Modal`/`ConfirmDialog` enter/exit — not on plain list/table page bodies.
+- **Icons**: `lucide-react` named imports, sized/colored via Tailwind tokens.
+- **Routing**: every route is `<ProtectedRoute><Layout>...</Layout></ProtectedRoute>`, flat, no nesting. `navigation.js` stays pure data.
+- **Pagination envelope**: `{count, total_pages, current_page, page_size, results}`, always through `usePaginatedList`. One exception: suppliers list returns a plain array (small dataset) — not license to skip pagination elsewhere.

@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ invoice.bill_number }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* page_margin/body_padding come from backend.pdf_utils — shared across
+     every PDF template, tune them there rather than per-template. */
+  @page {
+    margin: {{ page_margin }};
+  }
+
+  body {
+    font-family: Arial, sans-serif;
+    font-size: 12px;
+    color: #1a1a1a;
+    padding: {{ body_padding }};
+  }
+
+  /* DRAFT watermark */
+  {% if is_draft %}
+  body::before {
+    content: "DRAFT";
+    position: fixed;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-35deg);
+    font-size: 120px;
+    font-weight: 900;
+    color: rgba(220, 50, 50, 0.12);
+    z-index: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  {% endif %}
+
+  .page { position: relative; z-index: 1; }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    border-bottom: 2px solid #1a1a1a;
+    padding-bottom: 16px;
+    margin-bottom: 20px;
+  }
+  .header-logo {
+    flex: 1 1 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .header-logo img {
+    max-height: 50px;
+    max-width: 140px;
+    object-fit: contain;
+  }
+  .header-center {
+    flex: 1 1 0;
+    text-align: center;
+  }
+  .company-name {
+    font-size: 18px;
+    font-weight: 900;
+    letter-spacing: 1px;
+    color: #1a1a1a;
+    white-space: nowrap;
+  }
+  .company-sub {
+    font-size: 11px;
+    color: #555;
+    margin-top: 3px;
+  }
+  .invoice-title {
+    flex: 1 1 0;
+    text-align: right;
+  }
+  .invoice-title h2 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1a1a1a;
+  }
+  {% if is_draft %}
+  .invoice-title h2 { color: #cc2222; }
+  {% endif %}
+  .invoice-title .bill-number {
+    font-size: 13px;
+    font-weight: 600;
+    margin-top: 4px;
+  }
+  .invoice-title .bill-date {
+    font-size: 11px;
+    color: #555;
+    margin-top: 2px;
+  }
+
+  /* Bill to */
+  .meta-row {
+    margin-bottom: 20px;
+  }
+  .bill-to .bill-to-row {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    font-size: 12px;
+  }
+  .bill-to .bill-to-label {
+    text-transform: uppercase;
+    color: #888;
+    letter-spacing: 1px;
+  }
+
+  /* Items table */
+  .items-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+  }
+  .items-table thead tr {
+    background: #1a1a1a;
+    color: #fff;
+  }
+  .items-table thead th {
+    padding: 8px 10px;
+    text-align: left;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .items-table thead th.right { text-align: right; }
+  .items-table tbody tr { border-bottom: 1px solid #e8e8e8; }
+  .items-table tbody tr:nth-child(even) { background: #f9f9f9; }
+  .items-table tbody td {
+    padding: 8px 10px;
+    font-size: 12px;
+    vertical-align: middle;
+  }
+  .items-table tbody td.right { text-align: right; }
+  .items-table tbody td.center { text-align: center; }
+
+  /* Totals */
+  .totals-wrapper {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 24px;
+  }
+  .totals-box {
+    width: 280px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .totals-box table { width: 100%; border-collapse: collapse; }
+  .totals-box td { padding: 7px 14px; font-size: 12px; }
+  .totals-box tr { border-bottom: 1px solid #f0f0f0; }
+  .totals-box tr:last-child { border-bottom: none; }
+  .totals-box .label { color: #555; }
+  .totals-box .amount { text-align: right; font-weight: 600; }
+  .totals-box .grand-row { background: #1a1a1a; }
+  .totals-box .grand-row td { color: #fff; font-size: 13px; font-weight: 700; }
+
+  @media print {
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">
+      {% if company_logo %}<img src="{{ company_logo }}" alt="{{ company_name }}">{% endif %}
+    </div>
+    <div class="header-center">
+      <div class="company-name">{{ company_name }}</div>
+      <div class="company-sub">Official Invoice</div>
+    </div>
+    <div class="invoice-title">
+      <h2>{% if is_draft %}DRAFT INVOICE{% else %}INVOICE{% endif %}</h2>
+      <div class="bill-number">{{ invoice.bill_number }}</div>
+      <div class="bill-date">
+        Date: {{ invoice_date }}
+      </div>
+    </div>
+  </div>
+
+  <!-- Bill To -->
+  <div class="meta-row">
+    <div class="bill-to">
+      <div class="bill-to-row">
+        <span class="bill-to-label">Bill To:</span>
+        <span>{{ invoice.customer.name }}</span>
+        <span>Code: {{ invoice.customer.code }}</span>
+        <span>Address: {{ invoice.customer.address }}</span>
+        {% if invoice.customer.mobile %}
+        <span>Mobile: {{ invoice.customer.mobile }}</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Items Table -->
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Product</th>
+        <th>Code</th>
+        <th class="right">Unit Price</th>
+        <th class="center">Qty</th>
+        <th class="right">Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td>{{ forloop.counter }}</td>
+        <td>{{ item.product_name }}</td>
+        <td>{{ item.product_code }}</td>
+        <td class="right">{{ item.effective_price_display }}</td>
+        <td class="center">{{ item.quantity }}</td>
+        <td class="right">{{ item.line_total_display }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Totals -->
+  <div class="totals-wrapper">
+    <div class="totals-box">
+      <table>
+        <tr class="grand-row">
+          <td class="label">Grand Total</td>
+          <td class="amount">{{ grand_total_display }}</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,257 @@
+/* ALL @import statements must be at the VERY TOP */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@100;200;300;400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+@import './style/ledger.css';
+
+/* Theme Configuration for Tailwind v4 */
+@theme {
+    --color-primary-50: #f0f4f8;
+    --color-primary-100: #d9e2ec;
+    --color-primary-200: #bcccdc;
+    --color-primary-300: #9fb3c8;
+    --color-primary-400: #627d98;
+    --color-primary-500: #486581;
+    --color-primary-600: #334e68;
+    --color-primary-700: #243b53;
+    --color-primary-800: #102a43;
+    --color-primary-900: #0a1f33;
+    --color-primary-950: #061627;
+
+    --color-accent-50: #eff8ff;
+    --color-accent-100: #daf0ff;
+    --color-accent-200: #b6e1ff;
+    --color-accent-300: #79caff;
+    --color-accent-400: #35adff;
+    --color-accent-500: #0b8fff;
+    --color-accent-600: #0369a1;
+    --color-accent-700: #065386;
+    --color-accent-800: #0a4570;
+    --color-accent-900: #0e395e;
+    --color-accent-950: #09233d;
+
+    --color-neutral-50: #f8fafc;
+    --color-neutral-100: #f1f5f9;
+    --color-neutral-200: #e2e8f0;
+    --color-neutral-300: #cbd5e1;
+    --color-neutral-400: #94a3b8;
+    --color-neutral-500: #64748b;
+    --color-neutral-600: #475569;
+    --color-neutral-700: #334155;
+    --color-neutral-800: #1e293b;
+    --color-neutral-900: #0f172a;
+    --color-neutral-950: #020617;
+
+    --color-success-50: #ecfdf5;
+    --color-success-500: #10b981;
+    --color-success-600: #059669;
+    --color-success-700: #047857;
+
+    --color-warning-50: #fffbeb;
+    --color-warning-500: #f59e0b;
+    --color-warning-600: #d97706;
+    --color-warning-700: #b45309;
+
+    --color-error-50: #fef2f2;
+    --color-error-500: #ef4444;
+    --color-error-600: #dc2626;
+    --color-error-700: #b91c1c;
+
+    --color-info-50: #eff6ff;
+    --color-info-500: #3b82f6;
+    --color-info-600: #2563eb;
+    --color-info-700: #1d4ed8;
+
+    --font-family-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+    --shadow-card-hover: 0 10px 30px -5px rgba(0, 0, 0, 0.15);
+    --shadow-premium: 0 20px 60px -15px rgba(0, 0, 0, 0.3);
+    --shadow-dropdown: 0 10px 40px -10px rgba(0, 0, 0, 0.2);
+    --shadow-modal: 0 25px 50px -12px rgba(0, 0, 0, 0.3);
+}
+
+@layer base {
+    * {
+        border-color: var(--color-neutral-200);
+    }
+
+    body {
+        background-color: var(--color-neutral-50);
+        color: var(--color-neutral-900);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    }
+
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+        background-color: var(--color-neutral-100);
+    }
+
+    ::-webkit-scrollbar-thumb {
+        background-color: var(--color-neutral-400);
+        border-radius: 9999px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+        background-color: var(--color-neutral-500);
+    }
+}
+
+@layer components {
+    .text-gradient {
+        background: linear-gradient(to right, var(--color-primary-700), var(--color-accent-600));
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    .btn-primary {
+        padding: 0.75rem 1.5rem;
+        background: linear-gradient(to right, var(--color-primary-700), var(--color-accent-600));
+        color: white;
+        font-weight: 500;
+        border-radius: 0.75rem;
+        transition: all 0.3s ease;
+        box-shadow: 0 10px 15px -3px rgba(51, 78, 104, 0.3);
+    }
+
+    .btn-primary:hover {
+        background: linear-gradient(to right, var(--color-primary-800), var(--color-accent-700));
+        box-shadow: 0 20px 25px -5px rgba(51, 78, 104, 0.4);
+        transform: translateY(-2px);
+    }
+
+    .btn-secondary {
+        padding: 0.75rem 1.5rem;
+        background-color: white;
+        color: var(--color-neutral-700);
+        font-weight: 500;
+        border-radius: 0.75rem;
+        border: 1px solid var(--color-neutral-200);
+        transition: all 0.3s ease;
+    }
+
+    .btn-secondary:hover {
+        background-color: var(--color-neutral-50);
+        border-color: var(--color-neutral-300);
+    }
+
+    .card {
+        background-color: white;
+        border-radius: 1rem;
+        padding: 1.5rem;
+        box-shadow: var(--shadow-card);
+        transition: all 0.3s ease;
+    }
+
+    .card:hover {
+        box-shadow: var(--shadow-card-hover);
+    }
+
+    .glass-effect {
+        background-color: rgba(255, 255, 255, 0.8);
+        backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+}
+
+@layer utilities {
+    .animation-delay-100 {
+        animation-delay: 100ms;
+    }
+
+    .animation-delay-200 {
+        animation-delay: 200ms;
+    }
+
+    .animation-delay-300 {
+        animation-delay: 300ms;
+    }
+
+    .animation-delay-400 {
+        animation-delay: 400ms;
+    }
+
+    .animation-delay-500 {
+        animation-delay: 500ms;
+    }
+
+    .animate-float {
+        animation: float 3s ease-in-out infinite;
+    }
+
+    .animate-pulse-glow {
+        animation: pulse-glow 2s ease-in-out infinite;
+    }
+}
+
+@keyframes float {
+
+    0%,
+    100% {
+        transform: translateY(0px);
+    }
+
+    50% {
+        transform: translateY(-10px);
+    }
+}
+
+@keyframes pulse-glow {
+
+    0%,
+    100% {
+        box-shadow: 0 0 20px rgba(11, 143, 255, 0.3);
+    }
+
+    50% {
+        box-shadow: 0 0 40px rgba(11, 143, 255, 0.6);
+    }
+}
+
+@keyframes shimmer {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(100%);
+    }
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    .dark {
+        color-scheme: dark;
+    }
+
+    body.dark {
+        background-color: var(--color-neutral-900);
+        color: white;
+    }
+
+    .dark .card {
+        background-color: var(--color-neutral-800);
+        border-color: var(--color-neutral-700);
+    }
+
+    .dark .btn-secondary {
+        background-color: var(--color-neutral-800);
+        border-color: var(--color-neutral-700);
+        color: white;
+    }
+
+    .dark .btn-secondary:hover {
+        background-color: var(--color-neutral-700);
+    }
+
+    .dark .glass-effect {
+        background-color: rgba(30, 41, 59, 0.8);
+        border-color: rgba(51, 65, 85, 0.5);
+    }
+}

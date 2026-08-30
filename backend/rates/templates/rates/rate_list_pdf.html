@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Product Rates</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* page_margin/body_padding come from backend.pdf_utils — shared across
+     every PDF template, tune them there rather than per-template. */
+  @page { margin: {{ page_margin }}; }
+
+  body { font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; padding: {{ body_padding }}; }
+
+  .page { position: relative; z-index: 1; }
+
+  /* Header — mirrors purchases/purchase_order_pdf.html's header exactly. */
+  .header {
+    display: flex; align-items: center;
+    border-bottom: 2px solid #1a1a1a; padding-bottom: 16px; margin-bottom: 20px;
+  }
+  .header-logo { flex: 1 1 0; display: flex; align-items: center; justify-content: flex-start; }
+  .header-logo img { max-height: 50px; max-width: 140px; object-fit: contain; }
+  .header-center { flex: 1 1 0; text-align: center; }
+  .company-name { font-size: 18px; font-weight: 900; letter-spacing: 1px; white-space: nowrap; }
+  .company-sub  { font-size: 11px; color: #555; margin-top: 3px; }
+  .doc-title     { flex: 1 1 0; text-align: right; }
+  .doc-title h2  { font-size: 22px; font-weight: 700; }
+  .doc-title .doc-date { font-size: 11px; color: #555; margin-top: 4px; }
+
+  .meta-row { margin-bottom: 20px; }
+  .filter-row { display: flex; align-items: baseline; gap: 16px; font-size: 12px; }
+  .filter-label { text-transform: uppercase; color: #888; letter-spacing: 1px; }
+
+  .items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  .items-table thead tr { background: #1a1a1a; color: #fff; }
+  .items-table thead th { padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .items-table thead th.right { text-align: right; }
+  .items-table tbody tr { border-bottom: 1px solid #e8e8e8; }
+  .items-table tbody tr:nth-child(even) { background: #f9f9f9; }
+  .items-table tbody td { padding: 8px 10px; font-size: 11px; vertical-align: middle; }
+  .items-table tbody td.right { text-align: right; }
+
+  .totals-wrapper { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+  .totals-row { display: flex; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
+  .totals-cell { padding: 10px 16px; text-align: right; }
+  .totals-label { font-size: 10px; color: #ccc; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .totals-value { font-size: 12px; font-weight: 700; color: #fff; }
+  .totals-cell-grand { background: #1a1a1a; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">
+      {% if company_logo %}<img src="{{ company_logo }}" alt="{{ company_name }}">{% endif %}
+    </div>
+    <div class="header-center">
+      <div class="company-name">{{ company_name }}</div>
+      <div class="company-sub">Product Rate List</div>
+    </div>
+    <div class="doc-title">
+      <h2>PRODUCT RATES</h2>
+      <div class="doc-date">Generated: {{ generated_at }}</div>
+    </div>
+  </div>
+
+  <!-- Filters applied -->
+  <div class="meta-row">
+    <div class="filter-row">
+      <span class="filter-label">Filters:</span>
+      <span>{{ filter_description }}</span>
+    </div>
+  </div>
+
+  <!-- Rates Table -->
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Product</th>
+        <th>Code</th>
+        <th>Category</th>
+        <th class="right">Selling Price</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ forloop.counter }}</td>
+        <td>{{ row.product_name }}</td>
+        <td>{{ row.product_code }}</td>
+        <td>{{ row.category_name }}</td>
+        <td class="right"><strong>{{ row.selling_price }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Total count -->
+  <div class="totals-wrapper">
+    <div class="totals-row">
+      <div class="totals-cell totals-cell-grand">
+        <div class="totals-label">Total Products</div>
+        <div class="totals-value">{{ rows|length }}</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

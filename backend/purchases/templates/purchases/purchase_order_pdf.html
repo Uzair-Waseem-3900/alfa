@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ order.order_number }}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  /* page_margin/body_padding come from backend.pdf_utils — shared across
+     every PDF template, tune them there rather than per-template. */
+  @page { margin: {{ page_margin }}; }
+
+  body { font-family: Arial, sans-serif; font-size: 12px; color: #1a1a1a; padding: {{ body_padding }}; }
+
+  /* DRAFT watermark */
+  {% if is_draft %}
+  body::before {
+    content: "DRAFT";
+    position: fixed;
+    top: 40%;
+    left: 50%;
+    transform: translate(-50%, -50%) rotate(-35deg);
+    font-size: 120px;
+    font-weight: 900;
+    color: rgba(220, 50, 50, 0.12);
+    z-index: 0;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  {% endif %}
+
+  .page { position: relative; z-index: 1; }
+
+  .header {
+    display: flex; align-items: center;
+    border-bottom: 2px solid #1a1a1a; padding-bottom: 16px; margin-bottom: 20px;
+  }
+  .header-logo { flex: 1 1 0; display: flex; align-items: center; justify-content: flex-start; }
+  .header-logo img { max-height: 50px; max-width: 140px; object-fit: contain; }
+  .header-center { flex: 1 1 0; text-align: center; }
+  .company-name { font-size: 18px; font-weight: 900; letter-spacing: 1px; white-space: nowrap; }
+  .company-sub  { font-size: 11px; color: #555; margin-top: 3px; }
+  .po-title     { flex: 1 1 0; text-align: right; }
+  .po-title h2  { font-size: 22px; font-weight: 700; }
+  {% if is_draft %}
+  .po-title h2  { color: #cc2222; }
+  {% endif %}
+  .po-title .order-number { font-size: 13px; font-weight: 600; margin-top: 4px; }
+  .po-title .order-date   { font-size: 11px; color: #555; margin-top: 2px; }
+
+  .meta-row { margin-bottom: 20px; }
+  .supplier-row { display: flex; align-items: baseline; gap: 16px; font-size: 12px; }
+  .supplier-label { text-transform: uppercase; color: #888; letter-spacing: 1px; }
+
+  .description-box {
+    background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 4px;
+    padding: 10px 14px; margin-bottom: 20px; font-size: 11px; color: #555;
+  }
+  .description-box strong { color: #1a1a1a; }
+
+  .items-table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
+  .items-table thead tr { background: #1a1a1a; color: #fff; }
+  .items-table thead th { padding: 8px 10px; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+  .items-table thead th.right { text-align: right; }
+  .items-table thead th.center { text-align: center; }
+  .items-table tbody tr { border-bottom: 1px solid #e8e8e8; }
+  .items-table tbody tr:nth-child(even) { background: #f9f9f9; }
+  .items-table tbody td { padding: 8px 10px; font-size: 11px; vertical-align: middle; }
+  .items-table tbody td.right  { text-align: right; }
+  .items-table tbody td.center { text-align: center; }
+
+  .totals-wrapper { display: flex; justify-content: flex-end; margin-bottom: 24px; }
+  .totals-row { display: flex; border: 1px solid #e0e0e0; border-radius: 4px; overflow: hidden; }
+  .totals-cell { padding: 10px 16px; border-right: 1px solid #f0f0f0; text-align: right; }
+  .totals-cell:last-child { border-right: none; }
+  .totals-label { font-size: 10px; color: #888; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .totals-value { font-size: 12px; font-weight: 600; }
+  .totals-cell-grand { background: #1a1a1a; }
+  .totals-cell-grand .totals-label { color: #ccc; }
+  .totals-cell-grand .totals-value { color: #fff; font-size: 12px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-logo">
+      {% if company_logo %}<img src="{{ company_logo }}" alt="{{ company_name }}">{% endif %}
+    </div>
+    <div class="header-center">
+      <div class="company-name">{{ company_name }}</div>
+      <div class="company-sub">Purchase Order</div>
+    </div>
+    <div class="po-title">
+      <h2>{% if is_draft %}DRAFT PURCHASE ORDER{% else %}PURCHASE ORDER{% endif %}</h2>
+      <div class="order-number">{{ order.order_number }}</div>
+      <div class="order-date">Date: {{ order_date }}</div>
+    </div>
+  </div>
+
+  <!-- Supplier -->
+  <div class="meta-row">
+    <div class="supplier-row">
+      <span class="supplier-label">Supplier:</span>
+      <span>{{ order.supplier.name }}</span>
+      <span>Code: {{ order.supplier.code }}</span>
+    </div>
+  </div>
+
+  <!-- Description -->
+  {% if order.description %}
+  <div class="description-box">
+    <strong>Notes:</strong> {{ order.description }}
+  </div>
+  {% endif %}
+
+  <!-- Items Table — shows ALL taxes (GST/WHT) as per business requirement -->
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th>#</th>
+        <th>Product</th>
+        <th>Code</th>
+        <th class="right">Unit Price</th>
+        <th class="center">Qty</th>
+        <th class="right">Gross</th>
+        <th class="center">GST%</th>
+        <th class="right">GST Amt</th>
+        <th class="center">WHT%</th>
+        <th class="right">WHT Amt</th>
+        <th class="right">Net Total</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td>{{ forloop.counter }}</td>
+        <td>
+          {{ item.product_name }}
+          {% if item.description %}<br><span style="font-size:10px;color:#888;">{{ item.description }}</span>{% endif %}
+        </td>
+        <td>{{ item.product_code }}</td>
+        <td class="right">{{ item.unit_price }}</td>
+        <td class="center">{{ item.quantity }}</td>
+        <td class="right">{{ item.gross_amount }}</td>
+        <td class="center">{{ item.gst }}%</td>
+        <td class="right">{{ item.gst_amount }}</td>
+        <td class="center">{{ item.wht }}%</td>
+        <td class="right">{{ item.wht_amount }}</td>
+        <td class="right"><strong>{{ item.total_price }}</strong></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Totals -->
+  <div class="totals-wrapper">
+    <div class="totals-row">
+      <div class="totals-cell">
+        <div class="totals-label">Gross Amount</div>
+        <div class="totals-value">{{ order.gross_amount }}</div>
+      </div>
+      <div class="totals-cell">
+        <div class="totals-label">GST Total</div>
+        <div class="totals-value">+ {{ order.gst_total }}</div>
+      </div>
+      <div class="totals-cell">
+        <div class="totals-label">WHT Total</div>
+        <div class="totals-value">- {{ order.wht_total }}</div>
+      </div>
+      <div class="totals-cell totals-cell-grand">
+        <div class="totals-label">Net Payable</div>
+        <div class="totals-value">{{ order.net_payable }}</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

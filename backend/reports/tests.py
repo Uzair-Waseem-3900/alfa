@@ -84,8 +84,16 @@ class ReportsTestBase(TestCase):
 
 
 class InventoryValuationAvgCostTests(ReportsTestBase):
-    """Inventory.avg_unit_cost is a frozen moving-average, updated only by
-    purchases (fixed 2026-09-14) — these cover the report's read side."""
+    """
+    avg_unit_cost: Inventory.avg_unit_cost, a frozen moving-average updated
+    only by purchases (fixed 2026-09-14). total_value: the TRUE live FIFO
+    valuation (reverted 2026-09-14 after making it WAC-derived broke the
+    Balance Sheet's reconciliation with FIFO-based COGS-at-sale — see
+    get_inventory_valuation_report_data's docstring). The two figures agree
+    only when a product's true remaining-batch cost hasn't drifted from its
+    average — see test_total_value_diverges_from_avg_cost_after_a_return
+    for the case where they don't.
+    """
 
     def test_moving_average_across_two_purchases_at_different_costs(self):
         from purchases.models import Inventory
@@ -113,7 +121,63 @@ class InventoryValuationAvgCostTests(ReportsTestBase):
         rows = get_inventory_valuation_report_data()
         row = next(r for r in rows if r["product_id"] == product.id)
         self.assertEqual(row["avg_unit_cost"], Decimal("60.0000"))
+        # No depletion has happened yet, so both batches are still fully
+        # intact — true FIFO total_value and avg*qty coincide here (this is
+        # NOT a guaranteed identity in general, see the divergence test below).
+        self.assertEqual(row["total_value"], Decimal("1200.0000"))
         self.assertEqual(row["total_value"], row["quantity_on_hand"] * row["avg_unit_cost"])
+
+    def test_total_value_diverges_from_avg_cost_after_a_return(self):
+        """
+        Proves total_value is the true live FIFO valuation, NOT
+        avg_unit_cost * quantity_on_hand — the exact scenario that broke the
+        Balance Sheet when total_value was briefly WAC-derived (2026-09-14).
+        """
+        from purchases.models import Inventory
+        from reports.selectors import get_inventory_valuation_report_data
+
+        product = self.make_stocked_product(stock=10)  # unit_cost=50 -> batch A
+        order_a = product.purchase_items.select_related("order").first().order
+        order_b = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 10, "unit_price": Decimal("70")}],
+            user=self.admin,
+        )
+        for item in order_b.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order_b.id, user=self.admin)
+        # avg = 60, qty = 20, true total_value = 10*50 + 10*70 = 1200
+
+        # Return 4 units from batch A (cost 50) — avg_unit_cost stays 60,
+        # but the TRUE remaining value drops by exactly 4*50=200.
+        item_a = order_a.items.first()
+        ret = create_purchase_return(
+            order_id=order_a.id,
+            items=[{"purchase_item_id": item_a.id, "quantity": 4}],
+            user=self.admin,
+        )
+        for return_item in ret.items.all():
+            set_purchase_return_item_shelf_allocations(
+                return_item_id=return_item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": return_item.quantity}],
+                user=self.admin,
+            )
+        accept_purchase_return(return_id=ret.id, user=self.admin)
+
+        inv = Inventory.objects.get(product=product)
+        self.assertEqual(inv.avg_unit_cost, Decimal("60.0000"))  # frozen, unchanged
+        self.assertEqual(inv.quantity, 16)
+
+        row = next(r for r in get_inventory_valuation_report_data() if r["product_id"] == product.id)
+        self.assertEqual(row["avg_unit_cost"], Decimal("60.0000"))
+        self.assertEqual(row["total_value"], Decimal("1000.0000"))  # 6*50 + 10*70, true FIFO
+        # The identity does NOT hold here — proves total_value is genuinely
+        # independent of avg_unit_cost, not silently derived from it.
+        self.assertNotEqual(row["total_value"], row["quantity_on_hand"] * row["avg_unit_cost"])
 
     def test_report_query_count_flat_regardless_of_batch_count(self):
         product = self.make_stocked_product(stock=5)

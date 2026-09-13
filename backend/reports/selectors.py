@@ -399,18 +399,28 @@ def get_inventory_valuation_report_data(*, search: str = None) -> list[dict]:
     One row per product currently in stock. Point-in-time — no date filter
     applies.
 
-    avg_unit_cost is read directly off Inventory.avg_unit_cost — a stored
-    moving-average, updated ONLY by real purchases (purchases.services.
-    sync_inventory(unit_cost=...)), deliberately frozen through returns and
-    lost/found adjustments (fixed 2026-09-14 — see Inventory.avg_unit_cost's
-    docstring for why a live per-batch recompute was wrong: returning units
-    from one specific FIFO batch shifted the reported average toward/away
-    from that batch's own cost). total_value is derived from it
-    (quantity_on_hand * avg_unit_cost) by design, so the two always agree —
-    no independent PurchaseItem batch-walk needed for this report anymore.
+    Two DELIBERATELY different cost figures, for two different questions
+    (decided 2026-09-14 after the first version of this fix made total_value
+    a WAC-derived figure and broke the Balance Sheet's reconciliation — see
+    accounting.selectors._assemble_balance_sheet):
+      - avg_unit_cost: read directly off Inventory.avg_unit_cost — a stored
+        moving-average, updated ONLY by real purchases (purchases.services.
+        sync_inventory(unit_cost=...)), frozen through returns and lost/found
+        adjustments. Answers "what do we usually pay for this" — see
+        Inventory.avg_unit_cost's docstring for the return-immunity fix.
+      - total_value: the TRUE live FIFO valuation, walked fresh from every
+        remaining purchase batch's real remaining_quantity * its own real
+        cost. Answers "what is this stock actually worth right now" and MUST
+        stay on the same FIFO basis profits/accounting use for COGS-at-sale
+        (FIFOLedger), or the Balance Sheet's asset side and its
+        retained-earnings side silently drift out of reconciliation whenever
+        a product's average and true FIFO cost differ.
+    These two numbers can legitimately disagree (avg_unit_cost * quantity_on_hand
+    != total_value) whenever a product's true remaining-batch cost has moved
+    away from its frozen average — that's expected, not a bug.
 
-    ONE query total, regardless of catalog size — was 2 (this query plus a
-    bulk batch fetch) before the batch-walk was removed.
+    Fetches every product's batches in ONE bulk query instead of one query
+    per product — 2 queries total regardless of catalog size.
     """
     inventory_qs = Inventory.objects.filter(quantity__gt=0).select_related(
         "product", "product__category",
@@ -419,8 +429,26 @@ def get_inventory_valuation_report_data(*, search: str = None) -> list[dict]:
     if _clean(search):
         inventory_qs = inventory_qs.filter(search_q(_clean(search), "product__name", "product__code"))
 
+    inventories = list(inventory_qs)
+    product_ids = [inv.product_id for inv in inventories]
+
+    batches_by_product = {}
+    batches = PurchaseItem.objects.filter(
+        product_id__in=product_ids,
+        is_deleted=False,
+        order__status=PurchaseOrder.Status.CONFIRMED,
+        remaining_quantity__gt=0,
+    ).order_by("product_id", "order__confirmed_at")
+    for batch in batches:
+        batches_by_product.setdefault(batch.product_id, []).append(batch)
+
     rows = []
-    for inv in inventory_qs:
+    for inv in inventories:
+        total_value = Decimal("0")
+        for batch in batches_by_product.get(inv.product_id, []):
+            unit_cost = batch.total_price / batch.quantity if batch.quantity else batch.unit_price
+            total_value += batch.remaining_quantity * unit_cost
+
         rows.append({
             "product_id": inv.product_id,
             "product_name": inv.product.name,
@@ -428,7 +456,7 @@ def get_inventory_valuation_report_data(*, search: str = None) -> list[dict]:
             "category_name": inv.product.category.name,
             "quantity_on_hand": inv.quantity,
             "avg_unit_cost": inv.avg_unit_cost,
-            "total_value": inv.quantity * inv.avg_unit_cost,
+            "total_value": total_value,
         })
 
     return rows

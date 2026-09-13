@@ -593,6 +593,45 @@ class PurchaseReturnRemainingQuantityTests(PurchasesTestBase):
             )
 
 
+class PurchaseReturnAvgCostImmunityTests(PurchasesTestBase):
+    """
+    Fixed 2026-09-14: Inventory.avg_unit_cost is a frozen moving-average,
+    moved only by purchases.services.sync_inventory(unit_cost=...) — a
+    purchase return (accept_purchase_return) must change quantity but never
+    the average, regardless of which batch's cost the returned units came
+    from.
+    """
+
+    def test_returning_from_a_batch_priced_off_average_does_not_move_avg_cost(self):
+        from purchases.models import Inventory
+
+        product = self.make_product()
+        order1 = self.make_confirmed_order(product, quantity=10, unit_price="50")
+        self.make_confirmed_order(product, quantity=10, unit_price="70")
+        # avg = (10*50 + 10*70) / 20 = 60
+        avg_before = Inventory.objects.get(product=product).avg_unit_cost
+        self.assertEqual(avg_before, Decimal("60.0000"))
+
+        # Return 4 units from the FIRST batch (unit_price=50) — its own cost
+        # (50) differs sharply from the current average (60). Under the old
+        # live-recompute design this would have dragged the average toward
+        # the remaining (70-cost) batch.
+        item = order1.items.first()
+        ret = create_purchase_return(
+            order_id=order1.id,
+            items=[{"purchase_item_id": item.id, "quantity": 4}],
+            user=self.admin,
+        )
+        self.allocate_return_items(ret)
+        accept_purchase_return(return_id=ret.id, user=self.admin)
+
+        inventory = Inventory.objects.get(product=product)
+        self.assertEqual(inventory.avg_unit_cost, avg_before)  # unchanged
+        self.assertEqual(inventory.quantity, 16)  # 20 - 4, quantity DOES change
+        item.refresh_from_db()
+        self.assertEqual(item.remaining_quantity, 6)  # 10 - 4
+
+
 class PurchaseReturnEditCancelTests(PurchasesTestBase):
     """
     A pending return has zero side effects until accepted, so editing or

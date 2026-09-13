@@ -277,7 +277,9 @@ def _stats_deltas_for_transition(old_bucket: str | None, new_bucket: str) -> dic
     return deltas
 
 
-def sync_inventory(*, product: Product, quantity_delta: int, user=None) -> None:
+def sync_inventory(
+    *, product: Product, quantity_delta: int, user=None, unit_cost: Decimal = None,
+) -> None:
     """
     THE single writer for Inventory.quantity — purchases AND billing must go
     through here (billing used to write quantity directly, which would let
@@ -290,15 +292,34 @@ def sync_inventory(*, product: Product, quantity_delta: int, user=None) -> None:
     low-stock/out-of-stock threshold, the singleton counters are adjusted in
     the same transaction. The row lock makes old_quantity trustworthy under
     concurrency, so a transition is never counted twice.
+
+    unit_cost: pass this ONLY when quantity_delta represents new stock
+    entering via a real purchase at a real cost (confirm_purchase_order,
+    create_opening_stock_order) — it applies the moving-average-cost
+    formula to Inventory.avg_unit_cost in the SAME lock/save, no extra
+    query. Every other caller (sales consumption, purchase/sales returns,
+    lost/found inventory) passes nothing, so avg_unit_cost is structurally
+    untouched by anything except a genuine purchase — see Inventory.
+    avg_unit_cost's docstring for why (fixed 2026-09-14).
     """
     with transaction.atomic():
         inventory, created = (
             Inventory.objects.select_for_update().get_or_create(product=product)
         )
         old_bucket = None if created else _stock_bucket(inventory.quantity)
+        old_quantity = inventory.quantity
 
         inventory.quantity = max(0, inventory.quantity + quantity_delta)
         update_fields = ["quantity", "last_updated_at"]
+
+        if unit_cost is not None and quantity_delta > 0:
+            old_qty_dec = Decimal(old_quantity)
+            new_qty_dec = Decimal(quantity_delta)
+            inventory.avg_unit_cost = (
+                (inventory.avg_unit_cost * old_qty_dec) + (unit_cost * new_qty_dec)
+            ) / (old_qty_dec + new_qty_dec)
+            update_fields.append("avg_unit_cost")
+
         if user is not None:
             inventory.last_updated_by = user
             update_fields.append("last_updated_by")
@@ -1132,7 +1153,13 @@ def confirm_purchase_order(*, order_id: int, user) -> PurchaseOrder:
     for item in items:
         item.remaining_quantity = item.quantity
         item.save(update_fields=["remaining_quantity"])
-        sync_inventory(product=item.product, quantity_delta=item.quantity, user=user)
+        # Tax-inclusive unit cost — same formula used everywhere else this
+        # batch's cost is read (FIFO consumption, return valuation).
+        item_unit_cost = item.total_price / item.quantity if item.quantity else item.unit_price
+        sync_inventory(
+            product=item.product, quantity_delta=item.quantity, user=user,
+            unit_cost=item_unit_cost,
+        )
         apply_shelf_allocations(
             product=item.product,
             allocations=[{"shelf": a.shelf, "quantity": a.quantity} for a in item.shelf_allocations.all()],
@@ -1264,7 +1291,13 @@ def create_opening_stock_order(*, supplier, items: list[dict], user) -> Purchase
         )  # .save() auto-computes gross/gst/wht/total
         pi.remaining_quantity = pi.quantity
         pi.save(update_fields=["remaining_quantity"])
-        sync_inventory(product=pi.product, quantity_delta=pi.quantity, user=user)
+        # A real bootstrap purchase at a real historical cost — same
+        # tax-inclusive formula used at every other batch-cost read site.
+        pi_unit_cost = pi.total_price / pi.quantity if pi.quantity else pi.unit_price
+        sync_inventory(
+            product=pi.product, quantity_delta=pi.quantity, user=user,
+            unit_cost=pi_unit_cost,
+        )
         apply_shelf_delta(
             shelf=shelf, product=pi.product, delta=pi.quantity,
             reason=ShelfStockMovement.Reason.PURCHASE_PUTAWAY,

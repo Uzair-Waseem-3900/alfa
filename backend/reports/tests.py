@@ -9,13 +9,15 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 
 from billing.models import Invoice
 from billing.services import (
-    confirm_invoice, create_customer, create_invoice,
-    set_invoice_item_shelf_allocations,
+    accept_return, confirm_invoice, create_customer, create_invoice,
+    create_return, set_invoice_item_shelf_allocations,
+    set_return_item_shelf_allocations,
 )
 from purchases.models import Category, LostInventoryRecord, Product, Shelf
 from purchases.services import (
-    confirm_purchase_order, create_lost_inventory_record, create_purchase_order,
-    create_supplier, set_purchase_item_shelf_allocations,
+    accept_purchase_return, confirm_purchase_order, create_lost_inventory_record,
+    create_purchase_order, create_purchase_return, create_supplier,
+    set_purchase_item_shelf_allocations, set_purchase_return_item_shelf_allocations,
 )
 from rates.services import create_rate
 from users.models import User
@@ -79,6 +81,227 @@ class ReportsTestBase(TestCase):
             Invoice.objects.filter(pk=invoice.pk).update(confirmed_at=aware)
             invoice.refresh_from_db()
         return invoice
+
+
+class InventoryValuationAvgCostTests(ReportsTestBase):
+    """Inventory.avg_unit_cost is a frozen moving-average, updated only by
+    purchases (fixed 2026-09-14) — these cover the report's read side."""
+
+    def test_moving_average_across_two_purchases_at_different_costs(self):
+        from purchases.models import Inventory
+        from reports.selectors import get_inventory_valuation_report_data
+
+        product = self.make_stocked_product(stock=10)  # unit_cost=50 -> avg=50
+        # Second purchase at a different cost — same product, new PO.
+        order = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 10, "unit_price": Decimal("70")}],
+            user=self.admin,
+        )
+        for item in order.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order.id, user=self.admin)
+
+        # (10*50 + 10*70) / 20 = 60
+        inv = Inventory.objects.get(product=product)
+        self.assertEqual(inv.avg_unit_cost, Decimal("60.0000"))
+
+        rows = get_inventory_valuation_report_data()
+        row = next(r for r in rows if r["product_id"] == product.id)
+        self.assertEqual(row["avg_unit_cost"], Decimal("60.0000"))
+        self.assertEqual(row["total_value"], row["quantity_on_hand"] * row["avg_unit_cost"])
+
+    def test_report_query_count_flat_regardless_of_batch_count(self):
+        product = self.make_stocked_product(stock=5)
+        view = InventoryValuationReportView.as_view()
+
+        def count():
+            request = self.factory.get("/reports/inventory-valuation/")
+            force_authenticate(request, user=self.admin)
+            with CaptureQueriesContext(connection) as ctx:
+                response = view(request)
+                response.render()
+            self.assertEqual(response.status_code, 200)
+            return len(ctx.captured_queries)
+
+        baseline = count()
+        for i in range(4):
+            order = create_purchase_order(
+                supplier_id=self.supplier.id,
+                items=[{"product_id": product.id, "quantity": 5, "unit_price": Decimal(f"{50 + i}")}],
+                user=self.admin,
+            )
+            for item in order.items.all():
+                set_purchase_item_shelf_allocations(
+                    purchase_item_id=item.id,
+                    allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                    user=self.admin,
+                )
+            confirm_purchase_order(order_id=order.id, user=self.admin)
+        grown = count()
+        self.assertEqual(baseline, grown)
+
+
+class BackfillInventoryAvgCostTests(ReportsTestBase):
+    def test_backfill_reconstructs_from_history_and_is_idempotent(self):
+        from django.core.management import call_command
+        from purchases.models import Inventory
+
+        product = self.make_stocked_product(stock=10)  # unit_cost=50
+        # Field defaults to 0 until the backfill runs, even though a real
+        # purchase already happened — simulates upgrading pre-existing data.
+        Inventory.objects.filter(product=product).update(avg_unit_cost=0)
+
+        call_command("backfill_inventory_avg_cost", verbosity=0)
+        first = Inventory.objects.get(product=product).avg_unit_cost
+        self.assertEqual(first, Decimal("50.0000"))
+
+        # Re-run without --force: already-seeded (non-zero) rows are left
+        # alone, so a later purchase's effect on avg_unit_cost isn't wiped.
+        order = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 10, "unit_price": Decimal("70")}],
+            user=self.admin,
+        )
+        for item in order.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order.id, user=self.admin)
+        after_purchase = Inventory.objects.get(product=product).avg_unit_cost
+        self.assertEqual(after_purchase, Decimal("60.0000"))
+
+        call_command("backfill_inventory_avg_cost", verbosity=0)
+        self.assertEqual(Inventory.objects.get(product=product).avg_unit_cost, after_purchase)
+
+    def test_backfill_corrects_a_snapshot_already_skewed_by_a_past_return(self):
+        """
+        The whole reason this command replays full history instead of
+        seeding from today's live batch-walk: a purchase return that
+        already happened (before this fix shipped) has already skewed
+        which batch has how much remaining_quantity, so "today's live
+        snapshot" is the WRONG number for any product with return history.
+        """
+        from django.core.management import call_command
+        from purchases.models import Inventory
+
+        product, order_a = self.make_product_with_two_cost_batches()  # 10@50 + 10@70
+
+        # Accept a return of 4 units specifically from the 50-cost batch —
+        # this is exactly what skews a live batch-walk (remaining: 6@50 + 10@70).
+        item_a = order_a.items.first()
+        ret = create_purchase_return(
+            order_id=order_a.id,
+            items=[{"purchase_item_id": item_a.id, "quantity": 4}],
+            user=self.admin,
+        )
+        for return_item in ret.items.all():
+            set_purchase_return_item_shelf_allocations(
+                return_item_id=return_item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": return_item.quantity}],
+                user=self.admin,
+            )
+        accept_purchase_return(return_id=ret.id, user=self.admin)
+
+        # Simulate this row predating the fix: avg_unit_cost never seeded.
+        Inventory.objects.filter(product=product).update(avg_unit_cost=0)
+
+        call_command("backfill_inventory_avg_cost", verbosity=0)
+
+        reconstructed = Inventory.objects.get(product=product).avg_unit_cost
+        # True historical average (purchases only, return never counted): 60.
+        self.assertEqual(reconstructed, Decimal("60.0000"))
+        # What the OLD (wrong) "seed from today's live snapshot" approach
+        # would have produced instead — proves this isn't a no-op scenario:
+        # remaining batches are 6@50 + 10@70 = 300+700=1000, qty=16 -> 62.5.
+        self.assertNotEqual(reconstructed, Decimal("62.5000"))
+
+    def make_product_with_two_cost_batches(self):
+        """Returns (product, order_a) — order_a is the first (50-cost) PO,
+        so callers can return specifically from that batch."""
+        product = self.make_stocked_product(stock=10)  # unit_cost=50
+        order_a = product.purchase_items.select_related("order").first().order
+        order_b = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 10, "unit_price": Decimal("70")}],
+            user=self.admin,
+        )
+        for item in order_b.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order_b.id, user=self.admin)
+        return product, order_a
+
+    def test_replay_accounts_for_a_sale_between_two_purchases(self):
+        """
+        Proves this is a true chronological event replay, not just a
+        quantity-weighted sum over every purchase ever made (which would be
+        WRONG whenever stock was depleted by a sale before a later
+        purchase): buy 10@50 (avg=50, qty=10) -> sell 8 (qty=2, avg still
+        50) -> buy 10@70. True perpetual-average result: (2*50 + 10*70) /
+        12 = 66.6667. A naive "sum every purchase ever" shortcut would give
+        (10*50 + 10*70)/20 = 60 instead — this test fails against that
+        shortcut and passes against a real event-order replay.
+        """
+        from django.core.management import call_command
+        from purchases.models import Inventory
+
+        product = self.make_stocked_product(stock=10)  # unit_cost=50
+
+        customer = create_customer(name="Cust A", code="CUSTA", address="x", user=self.admin)
+        invoice = create_invoice(
+            customer_id=customer.id,
+            items=[{"product_id": product.id, "quantity": 8}],
+            user=self.admin,
+        )
+        for inv_item in invoice.items.all():
+            set_invoice_item_shelf_allocations(
+                invoice_item_id=inv_item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": inv_item.quantity}],
+                user=self.admin,
+            )
+        confirm_invoice(invoice_id=invoice.id, user=self.admin)
+
+        order_b = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 10, "unit_price": Decimal("70")}],
+            user=self.admin,
+        )
+        for item in order_b.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order_b.id, user=self.admin)
+
+        # This purchase already ran under the fixed sync_inventory, so the
+        # live value is already correct — confirm it directly.
+        self.assertEqual(
+            Inventory.objects.get(product=product).avg_unit_cost.quantize(Decimal("0.0001")),
+            ((Decimal("2") * 50 + Decimal("10") * 70) / Decimal("12")).quantize(Decimal("0.0001")),
+        )
+
+        # Now prove the BACKFILL command reconstructs the same correct
+        # number from scratch, via full replay (not a naive sum).
+        Inventory.objects.filter(product=product).update(avg_unit_cost=0)
+        call_command("backfill_inventory_avg_cost", verbosity=0)
+        reconstructed = Inventory.objects.get(product=product).avg_unit_cost
+        self.assertEqual(
+            reconstructed.quantize(Decimal("0.0001")),
+            ((Decimal("2") * 50 + Decimal("10") * 70) / Decimal("12")).quantize(Decimal("0.0001")),
+        )
+        naive_sum_shortcut = (Decimal("10") * 50 + Decimal("10") * 70) / Decimal("20")
+        self.assertNotEqual(reconstructed, naive_sum_shortcut)
 
 
 class DateRangeFilterBoundaryTests(ReportsTestBase):

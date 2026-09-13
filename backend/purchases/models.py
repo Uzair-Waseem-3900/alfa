@@ -639,6 +639,13 @@ class Inventory(models.Model):
     # Indexed — the low-stock / out-of-stock breakdown endpoints filter on
     # quantity thresholds.
     quantity        = models.PositiveIntegerField(default=0, db_index=True)
+    # Weighted-average cost, moved ONLY by real purchases (new POs and
+    # data-entry opening stock) via services.sync_inventory(unit_cost=...).
+    # Deliberately frozen through returns and lost/found adjustments — those
+    # events change quantity, never this figure (fixed 2026-09-14: a live
+    # per-batch recompute meant returning units from one specific FIFO batch
+    # shifted the reported average toward/away from that batch's own cost).
+    avg_unit_cost   = models.DecimalField(max_digits=14, decimal_places=4, default=0)
     last_updated_at = models.DateTimeField(auto_now=True)
     last_updated_by = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL,

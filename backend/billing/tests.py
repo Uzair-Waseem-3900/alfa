@@ -223,6 +223,56 @@ class InvoiceLifecycleTests(BillingTestBase):
         self.assertEqual(invoice.payment_status, Invoice.PaymentStatus.UNPAID)
 
 
+class SalesReturnAvgCostImmunityTests(BillingTestBase):
+    """
+    Fixed 2026-09-14: Inventory.avg_unit_cost is a frozen moving-average,
+    moved only by purchases.services.sync_inventory(unit_cost=...) — a
+    sales/customer return (accept_return -> _reverse_fifo) restores
+    quantity to whichever batch(es) the original sale actually consumed
+    (newest-first), at THEIR cost — which the fix requires must never move
+    the average, even when that batch's cost differs sharply from it.
+    """
+
+    def test_return_restoring_a_different_cost_batch_does_not_move_avg_cost(self):
+        product = self.make_stocked_product(stock=10, unit_cost="50")  # batch A
+        order_b = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 10, "unit_price": Decimal("70")}],
+            user=self.admin,
+        )
+        for item in order_b.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order_b.id, user=self.admin)
+        # avg = (10*50 + 10*70) / 20 = 60
+        avg_before_sale = Inventory.objects.get(product=product).avg_unit_cost
+        self.assertEqual(avg_before_sale, Decimal("60.0000"))
+
+        # Sell 12 -> FIFO consumes all 10 of batch A (cost 50) + 2 of batch
+        # B (cost 70). Sale must not move the average either.
+        invoice = self.make_confirmed_invoice(product, quantity=12)
+        self.assertEqual(Inventory.objects.get(product=product).avg_unit_cost, avg_before_sale)
+
+        # Accept a return of 2 units — _reverse_fifo restores newest-first,
+        # i.e. the 2 units it restores land back on batch B (cost 70), the
+        # exact scenario that used to drag the average toward 70.
+        invoice_item = invoice.items.first()
+        ret = create_return(
+            invoice_id=invoice.id,
+            items=[{"invoice_item_id": invoice_item.id, "quantity": 2}],
+            user=self.admin,
+        )
+        self.allocate_return_items(ret)
+        accept_return(return_id=ret.id, user=self.admin)
+
+        inventory = Inventory.objects.get(product=product)
+        self.assertEqual(inventory.avg_unit_cost, avg_before_sale)  # still 60, unchanged
+        self.assertEqual(inventory.quantity, 10)  # 20 - 12 + 2, quantity DOES change
+
+
 class ReturnEditCancelTests(BillingTestBase):
     """
     A pending return has zero side effects until accepted, so editing or

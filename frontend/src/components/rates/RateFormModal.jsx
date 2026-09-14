@@ -4,6 +4,8 @@ import Modal from '../ui/Modal';
 import Input from '../ui/Input';
 import Button from '../ui/Button';
 import InlineAlert from '../ui/InlineAlert';
+import LoadingSpinner from '../ui/LoadingSpinner';
+import { ratesApi } from '../../services/ratesApi';
 import { extractErrorMessage } from '../../utils/errorMessage';
 
 const FIELD_KEYS = ['selling_price', 'note', 'product_id'];
@@ -22,6 +24,24 @@ const RateFormModal = ({
     });
     const [errors, setErrors] = useState({});
     const [apiError, setApiError] = useState('');
+
+    // COGS (current avg unit cost) — fetched after the modal is already
+    // open/visible, never blocking it; a failure just leaves cost null
+    // (shown as "unavailable"), the price form stays fully usable either way.
+    const [cost, setCost] = useState(null);
+    const [costLoading, setCostLoading] = useState(false);
+
+    useEffect(() => {
+        if (!isOpen || !product?.id) return undefined;
+        let cancelled = false;
+        setCost(null);
+        setCostLoading(true);
+        ratesApi.getCost(product.id)
+            .then((data) => { if (!cancelled) setCost(data); })
+            .catch(() => { if (!cancelled) setCost(null); })
+            .finally(() => { if (!cancelled) setCostLoading(false); });
+        return () => { cancelled = true; };
+    }, [isOpen, product?.id]);
 
     useEffect(() => {
         if (isOpen) {
@@ -120,6 +140,21 @@ const RateFormModal = ({
                         </p>
                     </div>
                 )}
+
+                <div className="p-3 bg-neutral-50 rounded-lg">
+                    <p className="text-sm text-neutral-500">Current COGS (avg cost)</p>
+                    {costLoading ? (
+                        <span className="inline-flex items-center gap-1.5 text-sm text-neutral-500">
+                            <LoadingSpinner size="sm" /> Loading…
+                        </span>
+                    ) : cost?.has_stock ? (
+                        <p className="font-medium text-neutral-900">
+                            Rs. {parseFloat(cost.avg_unit_cost).toFixed(2)}
+                        </p>
+                    ) : (
+                        <p className="text-sm text-neutral-400">No stock on hand — cost unavailable</p>
+                    )}
+                </div>
 
                 <Input
                     label="New Selling Price"

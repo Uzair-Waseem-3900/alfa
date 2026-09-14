@@ -929,3 +929,49 @@ class SetReturnItemShelfAllocationsView(APIView):
         )
         return_item = get_return_item_by_id(pk)
         return Response(ReturnItemReadSerializer(return_item, context={"request": request}).data, status=status.HTTP_200_OK)
+
+
+from .serializers import AvailableQuantitySerializer
+
+
+# ---------------------------------------------------------------------------
+# Available quantity — shown while picking a product in a draft invoice's
+# Line Items (2026-09), mirroring the Credit Score display on customer
+# selection. Read-only, no side effects.
+# ---------------------------------------------------------------------------
+
+class AvailableQuantityView(APIView):
+    """
+    GET /billing/available-quantity/<product_id>/?exclude_invoice_id=<id>
+    exclude_invoice_id (optional) is the invoice currently being edited —
+    its own existing reservation for this product is excluded from
+    reserved_by_other_drafts so editing a draft never falsely counts
+    against itself (used by the Edit Invoice page; Create Invoice never
+    passes it, nothing to exclude yet).
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, product_id):
+        from django.db.models import Sum
+
+        from purchases.selectors import get_product_by_id
+
+        from .selectors import get_available_purchase_batches, get_reserved_quantity_for_product
+
+        get_product_by_id(product_id)  # 404s if missing/deleted
+
+        exclude_invoice_id = request.query_params.get("exclude_invoice_id")
+        exclude_invoice_id = int(exclude_invoice_id) if exclude_invoice_id else None
+
+        physical = (
+            get_available_purchase_batches(product_id)
+            .aggregate(total=Sum("remaining_quantity"))["total"] or 0
+        )
+        reserved = get_reserved_quantity_for_product(product_id=product_id, exclude_invoice_id=exclude_invoice_id)
+
+        data = {
+            "physical_quantity": physical,
+            "reserved_by_other_drafts": reserved,
+            "available_quantity": physical - reserved,
+        }
+        return Response(AvailableQuantitySerializer(data).data)

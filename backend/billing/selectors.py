@@ -258,6 +258,53 @@ def get_available_purchase_batches(product_id: int, *, for_update: bool = False)
 
 
 # ---------------------------------------------------------------------------
+# Cross-draft stock reservation (2026-09) — a DRAFT invoice never touches
+# real stock (that only happens at confirm), so two drafts could otherwise
+# both "promise" the same physical units with no visibility into each
+# other. This sums what OTHER drafts have already committed for one
+# product, feeding both the available-quantity display endpoint and
+# services._validate_stock's cross-draft enforcement.
+# ---------------------------------------------------------------------------
+
+def get_reserved_quantity_for_product(*, product_id: int, exclude_invoice_id: int = None):
+    """
+    Total quantity of this product committed to OTHER draft invoices right
+    now. exclude_invoice_id lets a draft being edited exclude its own
+    existing reservation from the sum, so editing an invoice you already
+    own never falsely counts against itself.
+    """
+    from decimal import Decimal
+
+    from django.db.models import Sum
+
+    qs = InvoiceItem.objects.filter(
+        invoice__status=Invoice.Status.DRAFT, invoice__is_deleted=False, product_id=product_id,
+    )
+    if exclude_invoice_id:
+        qs = qs.exclude(invoice_id=exclude_invoice_id)
+    return qs.aggregate(total=Sum("quantity"))["total"] or Decimal("0")
+
+
+def get_reserved_quantities_for_products(*, product_ids: list[int], exclude_invoice_id: int = None) -> dict:
+    """
+    Bulk twin of get_reserved_quantity_for_product — one query for a whole
+    set of products instead of one query each, same "batch it, don't loop
+    it" shape _build_draft_preview's own batches_by_product already uses
+    for FIFO batches. Returns {product_id: reserved_quantity}; a product
+    with zero reservations is simply absent (callers should default to 0).
+    """
+    from django.db.models import Sum
+
+    qs = InvoiceItem.objects.filter(
+        invoice__status=Invoice.Status.DRAFT, invoice__is_deleted=False, product_id__in=product_ids,
+    )
+    if exclude_invoice_id:
+        qs = qs.exclude(invoice_id=exclude_invoice_id)
+    rows = qs.values("product_id").annotate(total=Sum("quantity"))
+    return {row["product_id"]: row["total"] for row in rows}
+
+
+# ---------------------------------------------------------------------------
 # Payment summary selectors
 # ---------------------------------------------------------------------------
 

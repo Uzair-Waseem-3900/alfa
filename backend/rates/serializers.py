@@ -80,3 +80,16 @@ class ProductRateCreateSerializer(ProductRateBaseWriteSerializer):
 class ProductRateUpdateSerializer(ProductRateBaseWriteSerializer):
     """Used for PATCH — only selling_price + note, product is immutable."""
     pass
+
+
+# ---------------------------------------------------------------------------
+# Product cost (COGS) — read-only, shown in the set/edit-price modal.
+# Reads the stored, frozen-through-returns purchases.Inventory.avg_unit_cost
+# directly — no live FIFO batch-walk here (see purchases/models.py's own
+# comment on why that figure is deliberately not live-recomputed).
+# ---------------------------------------------------------------------------
+
+class ProductCostSerializer(serializers.Serializer):
+    quantity_on_hand = serializers.DecimalField(max_digits=14, decimal_places=4)
+    avg_unit_cost    = serializers.DecimalField(max_digits=14, decimal_places=4)
+    has_stock        = serializers.BooleanField()

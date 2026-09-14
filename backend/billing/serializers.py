@@ -37,6 +37,8 @@ def _build_draft_preview(invoice: Invoice) -> dict | None:
 
     from purchases.models import PurchaseItem
 
+    from .selectors import get_reserved_quantities_for_products
+
     preview_items     = []
     total_subtotal    = Decimal("0")
     total_cogs        = Decimal("0")
@@ -62,6 +64,13 @@ def _build_draft_preview(invoice: Invoice) -> dict | None:
     for batch in all_batches:
         batches_by_product.setdefault(batch.product_id, []).append(batch)
 
+    # One reservation query for the whole invoice instead of one per line
+    # item — same "batch it, don't loop it" shape as batches_by_product
+    # above.
+    reserved_by_product = get_reserved_quantities_for_products(
+        product_ids=[item.product_id for item in items], exclude_invoice_id=invoice.id,
+    )
+
     for item in items:
         product = item.product
 
@@ -74,7 +83,14 @@ def _build_draft_preview(invoice: Invoice) -> dict | None:
 
         # --- FIFO peek: blended cost from oldest batches (read-only) ---
         batches = batches_by_product.get(product.id, [])
-        available_qty  = sum(b.remaining_quantity for b in batches)
+        physical_qty   = sum(b.remaining_quantity for b in batches)
+        # Cross-draft reservation (2026-09) — excludes THIS invoice's own
+        # line (it's what we're previewing), so the preview panel never
+        # disagrees with the inline "Available Qty" tile shown while
+        # picking a product. See billing.services._validate_stock's
+        # identical check_draft_reservations logic.
+        reserved_by_others = reserved_by_product.get(product.id, 0)
+        available_qty  = physical_qty - reserved_by_others
         qty_to_consume = item.quantity
         remaining      = qty_to_consume
         total_cost     = Decimal("0")
@@ -693,3 +709,15 @@ class SavePDFRequestSerializer(serializers.Serializer):
 
     def validate_file_name(self, value):
         return value.strip() if value else value
+
+
+# ---------------------------------------------------------------------------
+# Available quantity (2026-09) — shown while picking a product in a draft
+# invoice's Line Items, mirroring how Credit Score is shown on customer
+# selection. See billing.selectors.get_reserved_quantity_for_product.
+# ---------------------------------------------------------------------------
+
+class AvailableQuantitySerializer(serializers.Serializer):
+    physical_quantity        = serializers.DecimalField(max_digits=14, decimal_places=4)
+    reserved_by_other_drafts = serializers.DecimalField(max_digits=14, decimal_places=4)
+    available_quantity       = serializers.DecimalField(max_digits=14, decimal_places=4)

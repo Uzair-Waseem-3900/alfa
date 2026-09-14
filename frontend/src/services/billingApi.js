@@ -146,4 +146,12 @@ export const billingApi = {
         },
         cancel: (returnId) => api.delete(`/billing/returns/${returnId}/`),
     },
+
+    // Available quantity for one product — physical stock minus what other
+    // draft invoices already reserve. excludeInvoiceId (optional) is the
+    // invoice being edited, so its own reservation isn't counted against it.
+    getAvailableQuantity: (productId, excludeInvoiceId) => {
+        const query = excludeInvoiceId ? `?exclude_invoice_id=${excludeInvoiceId}` : '';
+        return api.get(`/billing/available-quantity/${productId}/${query}`);
+    },
 };

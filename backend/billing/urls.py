@@ -3,6 +3,7 @@ from django.urls import path
 from .views import (
     AllInvoicePaymentsView,
     AllOutstandingInvoicesView,
+    AvailableQuantityView,
     ConfirmedInvoiceListView,
     CustomerListCreateView,
     CustomerOutstandingListView,
@@ -77,6 +78,9 @@ urlpatterns = [
 
     # Delete a saved PDF
     path("pdf/<int:saved_pdf_id>/", SavedPDFDeleteView.as_view(), name="pdf-delete"),
+
+    # Available quantity — shown while picking a product in a draft invoice's Line Items
+    path("available-quantity/<int:product_id>/", AvailableQuantityView.as_view(), name="available-quantity"),
 
     # Shelf allocations — sale line consumption / return line put-away
     path("shelves/candidates/", InvoiceCandidateShelvesView.as_view(), name="invoice-candidate-shelves"),

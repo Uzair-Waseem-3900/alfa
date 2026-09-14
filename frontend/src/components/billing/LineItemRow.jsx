@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { motion } from 'framer-motion';
 import PropTypes from 'prop-types';
-import { Minus, Plus, Trash2, Package } from 'lucide-react';
+import { Minus, Plus, Trash2, Package, Boxes } from 'lucide-react';
 import Input from '../ui/Input';
 import SearchableSelect from '../ui/SearchableSelect';
+import { billingApi } from '../../services/billingApi';
 
 const LineItemRow = ({
     index,
@@ -12,7 +14,25 @@ const LineItemRow = ({
     onRemove,
     canEdit = true,
     errors,
+    excludeInvoiceId,
 }) => {
+    // Available quantity (physical stock minus what other draft invoices
+    // already reserve for this product) — fetched once on product
+    // selection, same one-shot/no-spinner-blocking/swallow-errors shape as
+    // Credit Score on the Customer picker. Purely informational display;
+    // the real enforcement happens server-side on submit.
+    const [availableQty, setAvailableQty] = useState(null);
+
+    const handleProductSelect = (value, option) => {
+        onUpdate(index, 'product_id', parseInt(value));
+        onUpdate(index, 'product_label', option?.label ?? '');
+        onUpdate(index, 'selling_price', option?.sellingPrice ?? 0);
+        setAvailableQty(null);
+        if (!value) return;
+        billingApi.getAvailableQuantity(value, excludeInvoiceId)
+            .then(setAvailableQty)
+            .catch(() => setAvailableQty(null));
+    };
     const calculateTotals = () => {
         const gross = (item.quantity || 0) * (item.selling_price || 0);
         const gstAmount = gross * ((item.gst || 0) / 100);
@@ -52,11 +72,7 @@ const LineItemRow = ({
                         label="Product"
                         value={item.product_id || ''}
                         selectedLabel={item.product_label}
-                        onChange={(value, option) => {
-                            onUpdate(index, 'product_id', parseInt(value));
-                            onUpdate(index, 'product_label', option?.label ?? '');
-                            onUpdate(index, 'selling_price', option?.sellingPrice ?? 0);
-                        }}
+                        onChange={handleProductSelect}
                         onSearch={onSearchProducts}
                         placeholder="Search product by name or code"
                         disabled={!canEdit}
@@ -144,8 +160,8 @@ const LineItemRow = ({
                 </div>
             </div>
 
-            {/* Row 3: Selling Price, Gross, Total, Remove */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {/* Row 3: Selling Price, Available Qty, Gross, Total, Remove */}
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                 <div className="col-span-1">
                     <div className="text-sm bg-neutral-50 p-2.5 rounded-lg h-full flex flex-col justify-center">
                         <p className="text-neutral-500 text-xs flex items-center gap-1">
@@ -153,6 +169,16 @@ const LineItemRow = ({
                         </p>
                         <p className="font-medium text-neutral-700">
                             {item.selling_price ? parseFloat(item.selling_price).toFixed(2) : '0.00'}
+                        </p>
+                    </div>
+                </div>
+                <div className="col-span-1">
+                    <div className="text-sm bg-neutral-50 p-2.5 rounded-lg h-full flex flex-col justify-center">
+                        <p className="text-neutral-500 text-xs flex items-center gap-1">
+                            <Boxes className="w-3 h-3" /> Available Qty
+                        </p>
+                        <p className="font-medium text-neutral-700">
+                            {availableQty ? parseFloat(availableQty.available_quantity).toFixed(0) : '—'}
                         </p>
                     </div>
                 </div>
@@ -194,6 +220,7 @@ LineItemRow.propTypes = {
     onRemove: PropTypes.func.isRequired,
     canEdit: PropTypes.bool,
     errors: PropTypes.object,
+    excludeInvoiceId: PropTypes.number,
 };
 
 export default LineItemRow;

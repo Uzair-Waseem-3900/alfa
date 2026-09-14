@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from purchases.serializers import ProductReadSerializer
 
 from .pdf_service import generate_rate_list_pdf_bytes
-from .permissions import IsAdminOrSuperuserOrReadOnly
+from .permissions import IsAdminOrSuperuser, IsAdminOrSuperuserOrReadOnly
 from .selectors import (
     get_all_rates,
     get_history_for_product,
@@ -15,6 +15,7 @@ from .selectors import (
     get_unpriced_products,
 )
 from .serializers import (
+    ProductCostSerializer,
     ProductRateCreateSerializer,
     ProductRateHistorySerializer,
     ProductRateReadSerializer,
@@ -171,3 +172,35 @@ class ProductRateHistoryView(generics.ListAPIView):
 
     def get_queryset(self):
         return get_history_for_product(product_id=self.kwargs["product_id"])
+
+
+# ---------------------------------------------------------------------------
+# Product cost (COGS) — shown in the set/edit-price modal while an
+# admin/superuser is choosing a selling price. Read-only, no side effects.
+# ---------------------------------------------------------------------------
+
+class ProductCostView(APIView):
+    """
+    GET /rates/cost/<product_id>/
+    Reads the stored, frozen-through-returns purchases.Inventory
+    .avg_unit_cost directly — same figure the Inventory Valuation report
+    already shows for this product. Admin/superuser only (stricter than
+    the price-history endpoint above): cost is more sensitive than price
+    history, and this is only ever called from the already-admin-only
+    price-editing modal.
+    """
+
+    permission_classes = [IsAdminOrSuperuser]
+
+    def get(self, request, product_id):
+        from purchases.models import Inventory
+        from purchases.selectors import get_product_by_id
+
+        get_product_by_id(product_id)  # 404s if missing/deleted
+        inv = Inventory.objects.filter(product_id=product_id).first()
+        data = {
+            "quantity_on_hand": inv.quantity if inv else 0,
+            "avg_unit_cost": inv.avg_unit_cost if inv else 0,
+            "has_stock": bool(inv and inv.quantity > 0),
+        }
+        return Response(ProductCostSerializer(data).data)

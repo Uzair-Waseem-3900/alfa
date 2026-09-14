@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    ProductCostView,
     ProductRateHistoryView,
     ProductRateListCreateView,
     ProductRateRetrieveUpdateView,
@@ -23,4 +24,7 @@ urlpatterns = [
 
     # Full price history for a product
     path("history/<int:product_id>/", ProductRateHistoryView.as_view(), name="rate-history"),
+
+    # Current COGS/avg-unit-cost for a product
+    path("cost/<int:product_id>/", ProductCostView.as_view(), name="rate-cost"),
 ]

@@ -1,4 +1,4 @@
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from django.db import transaction
 from django.db.models import F, Q, Sum
 from django.utils import timezone
@@ -293,14 +293,17 @@ def sync_inventory(
     the same transaction. The row lock makes old_quantity trustworthy under
     concurrency, so a transition is never counted twice.
 
-    unit_cost: pass this ONLY when quantity_delta represents new stock
-    entering via a real purchase at a real cost (confirm_purchase_order,
-    create_opening_stock_order) — it applies the moving-average-cost
-    formula to Inventory.avg_unit_cost in the SAME lock/save, no extra
-    query. Every other caller (sales consumption, purchase/sales returns,
+    unit_cost: pass this ONLY when quantity_delta represents a real change
+    in what was paid/kept from a supplier — a genuine purchase
+    (confirm_purchase_order, create_opening_stock_order, positive delta) or
+    an accepted purchase return (accept_purchase_return, negative delta,
+    that specific returned batch's own cost) — it applies the moving-
+    average-cost formula to Inventory.avg_unit_cost in the SAME lock/save,
+    no extra query. Every other caller (sales consumption, sales returns,
     lost/found inventory) passes nothing, so avg_unit_cost is structurally
-    untouched by anything except a genuine purchase — see Inventory.
-    avg_unit_cost's docstring for why (fixed 2026-09-14).
+    untouched by anything except a genuine purchase or purchase return —
+    see Inventory.avg_unit_cost's docstring for why (fixed 2026-09-14,
+    extended to purchase returns 2026-09-15).
     """
     with transaction.atomic():
         inventory, created = (
@@ -312,12 +315,15 @@ def sync_inventory(
         inventory.quantity = max(0, inventory.quantity + quantity_delta)
         update_fields = ["quantity", "last_updated_at"]
 
-        if unit_cost is not None and quantity_delta > 0:
-            old_qty_dec = Decimal(old_quantity)
-            new_qty_dec = Decimal(quantity_delta)
-            inventory.avg_unit_cost = (
-                (inventory.avg_unit_cost * old_qty_dec) + (unit_cost * new_qty_dec)
-            ) / (old_qty_dec + new_qty_dec)
+        if unit_cost is not None and quantity_delta != 0:
+            new_qty_for_avg = old_quantity + quantity_delta
+            if new_qty_for_avg > 0:
+                inventory.avg_unit_cost = (
+                    (inventory.avg_unit_cost * Decimal(old_quantity)) + (Decimal(unit_cost) * Decimal(quantity_delta))
+                ) / Decimal(new_qty_for_avg)
+            else:
+                inventory.avg_unit_cost = Decimal("0")
+            inventory.avg_unit_cost = inventory.avg_unit_cost.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
             update_fields.append("avg_unit_cost")
 
         if user is not None:
@@ -1629,8 +1635,14 @@ def accept_purchase_return(*, return_id: int, user) -> PurchaseReturn:
         locked_item.returned_quantity = purchase_item.returned_quantity + qty
         locked_item.save(update_fields=["remaining_quantity", "returned_quantity"])
 
-        # Decrease inventory (global) and the specific shelf(s) it's pulled from
-        sync_inventory(product=purchase_item.product, quantity_delta=-qty, user=user)
+        # Decrease inventory (global) and the specific shelf(s) it's pulled from.
+        # This return's own batch cost moves avg_unit_cost in the opposite
+        # direction of a purchase — same tax-inclusive formula used for the
+        # purchase-side event.
+        return_unit_cost = (
+            purchase_item.total_price / purchase_item.quantity if purchase_item.quantity else purchase_item.unit_price
+        )
+        sync_inventory(product=purchase_item.product, quantity_delta=-qty, user=user, unit_cost=return_unit_cost)
         apply_shelf_allocations(
             product=purchase_item.product,
             allocations=[{"shelf": a.shelf, "quantity": a.quantity} for a in return_item.shelf_allocations.all()],

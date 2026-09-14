@@ -593,16 +593,21 @@ class PurchaseReturnRemainingQuantityTests(PurchasesTestBase):
             )
 
 
-class PurchaseReturnAvgCostImmunityTests(PurchasesTestBase):
+class PurchaseReturnAvgCostTests(PurchasesTestBase):
     """
-    Fixed 2026-09-14: Inventory.avg_unit_cost is a frozen moving-average,
-    moved only by purchases.services.sync_inventory(unit_cost=...) — a
-    purchase return (accept_purchase_return) must change quantity but never
-    the average, regardless of which batch's cost the returned units came
-    from.
+    Fixed 2026-09-14, extended to purchase returns 2026-09-15:
+    Inventory.avg_unit_cost is a frozen moving-average, moved only by
+    purchases.services.sync_inventory(unit_cost=...) at (1) a confirmed
+    purchase and (2) an accepted purchase return — both are real changes
+    to what was actually paid/kept from a supplier. A purchase return
+    reverses part of a purchase at that specific returned batch's own
+    cost, using the same unified moving-average formula as a purchase
+    (just with a negative quantity delta) — it is NOT immune to moving
+    the average; it moves it in the opposite direction of a purchase at
+    that batch's cost.
     """
 
-    def test_returning_from_a_batch_priced_off_average_does_not_move_avg_cost(self):
+    def test_returning_from_a_batch_priced_off_average_moves_avg_cost_by_its_own_cost(self):
         from purchases.models import Inventory
 
         product = self.make_product()
@@ -613,9 +618,9 @@ class PurchaseReturnAvgCostImmunityTests(PurchasesTestBase):
         self.assertEqual(avg_before, Decimal("60.0000"))
 
         # Return 4 units from the FIRST batch (unit_price=50) — its own cost
-        # (50) differs sharply from the current average (60). Under the old
-        # live-recompute design this would have dragged the average toward
-        # the remaining (70-cost) batch.
+        # (50) differs sharply from the current average (60). The average
+        # must move by exactly that batch's own cost contribution, same
+        # formula as a purchase: (60*20 - 50*4) / 16 = 62.5.
         item = order1.items.first()
         ret = create_purchase_return(
             order_id=order1.id,
@@ -626,10 +631,35 @@ class PurchaseReturnAvgCostImmunityTests(PurchasesTestBase):
         accept_purchase_return(return_id=ret.id, user=self.admin)
 
         inventory = Inventory.objects.get(product=product)
-        self.assertEqual(inventory.avg_unit_cost, avg_before)  # unchanged
+        self.assertEqual(inventory.avg_unit_cost, Decimal("62.5000"))
         self.assertEqual(inventory.quantity, 16)  # 20 - 4, quantity DOES change
         item.refresh_from_db()
         self.assertEqual(item.remaining_quantity, 6)  # 10 - 4
+
+    def test_partial_return_from_second_batch_matches_hand_computed_average(self):
+        """The Cartons-shaped scenario: two batches (500@100, 500@80) ->
+        avg 90.00; returning 100 units from the 80-batch -> (90*1000 -
+        80*100)/900 = 91.1111, matching a live batch-walk recompute."""
+        from purchases.models import Inventory
+
+        product = self.make_product()
+        self.make_confirmed_order(product, quantity=500, unit_price="100")
+        order2 = self.make_confirmed_order(product, quantity=500, unit_price="80")
+        avg_before = Inventory.objects.get(product=product).avg_unit_cost
+        self.assertEqual(avg_before, Decimal("90.0000"))
+
+        item = order2.items.first()
+        ret = create_purchase_return(
+            order_id=order2.id,
+            items=[{"purchase_item_id": item.id, "quantity": 100}],
+            user=self.admin,
+        )
+        self.allocate_return_items(ret)
+        accept_purchase_return(return_id=ret.id, user=self.admin)
+
+        inventory = Inventory.objects.get(product=product)
+        self.assertEqual(inventory.avg_unit_cost, Decimal("91.1111"))
+        self.assertEqual(inventory.quantity, 900)
 
 
 class PurchaseReturnEditCancelTests(PurchasesTestBase):

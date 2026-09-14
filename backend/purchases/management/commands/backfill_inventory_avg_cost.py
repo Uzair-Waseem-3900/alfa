@@ -1,12 +1,12 @@
 from datetime import datetime, time
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from billing.models import Invoice, InvoiceItem, Return, ReturnItem
 from purchases.models import (
-    Inventory, LostInventoryItem, LostInventoryRecovery, PurchaseItem,
+    Inventory, LostInventoryItem, LostInventoryRecovery, Product, PurchaseItem,
     PurchaseOrder, PurchaseReturn, PurchaseReturnItem,
 )
 
@@ -28,10 +28,13 @@ class Command(BaseCommand):
     One-time historical reconstruction of Inventory.avg_unit_cost — replays
     EVERY event that ever changed a product's stock, in the order it really
     happened, and recalculates the moving average ONLY at purchase events
-    (using the real quantity-on-hand at that moment as the weight) — exactly
-    matching the invariant purchases.services.sync_inventory() now enforces
-    going forward. Neutral events (sales, returns either direction, lost,
-    recovered) only move the replayed quantity, never the average.
+    AND accepted purchase-return events (using the real quantity-on-hand at
+    that moment as the weight, and — for a return — the specific returned
+    batch's own cost) — exactly matching the invariant purchases.services
+    .sync_inventory() now enforces going forward (fixed 2026-09-14,
+    extended to purchase returns 2026-09-15). Neutral events (sales, sales
+    returns, lost, recovered) only move the replayed quantity, never the
+    average.
 
     This is deliberately NOT "seed from today's live batch-walk snapshot"
     (that was this command's original, wrong approach) — for any product
@@ -40,7 +43,7 @@ class Command(BaseCommand):
     permanently lock in the very distortion this feature exists to remove.
     Replaying full history is the only way to recover the number the
     average would show if it had never been able to move except on a
-    purchase.
+    purchase or purchase return.
 
     Idempotent by default: only reconstructs products where avg_unit_cost
     is still 0 (never seeded) — safe to re-run after a partial/interrupted
@@ -65,19 +68,30 @@ class Command(BaseCommand):
             "--force", action="store_true",
             help="Reprocess every product, even ones with a non-zero avg_unit_cost already. See docstring — not a routine re-run.",
         )
+        parser.add_argument(
+            "--dry-run", action="store_true",
+            help=(
+                "Compute the reconstructed avg_unit_cost for every product with stock "
+                "(same scope as --force) and print an old-vs-new comparison table — "
+                "writes nothing to the database. Use this to see exactly what a real "
+                "--force run would change before running it."
+            ),
+        )
 
     def handle(self, *args, **options):
         force = options["force"]
+        dry_run = options["dry_run"]
 
         inventories = Inventory.objects.filter(quantity__gt=0)
-        if not force:
+        if not force and not dry_run:
             inventories = inventories.filter(avg_unit_cost=0)
         inventories = list(inventories)
         product_ids = [inv.product_id for inv in inventories]
 
         events_by_product = {pid: [] for pid in product_ids}
 
-        # --- Cost events: purchases (the ONLY events that move the average) ---
+        # --- Cost events: purchases and purchase returns (the ONLY events
+        # that move the average) ---
         purchases = PurchaseItem.objects.filter(
             product_id__in=product_ids, is_deleted=False,
             order__status=PurchaseOrder.Status.CONFIRMED,
@@ -99,14 +113,19 @@ class Command(BaseCommand):
                 _as_datetime(item.invoice.confirmed_at), 0, "sale", -item.quantity, None,
             ))
 
+        # A purchase return is a cost event too (2026-09-15) — it reverses
+        # part of a real purchase, at that specific returned batch's own
+        # cost, same tiebreak-last-on-ties treatment as a purchase.
         purchase_returns = PurchaseReturnItem.objects.filter(
             purchase_item__product_id__in=product_ids,
             return_record__status=PurchaseReturn.Status.ACCEPTED,
             return_record__accepted_at__isnull=False,
         ).select_related("return_record", "purchase_item")
         for ritem in purchase_returns:
-            events_by_product[ritem.purchase_item.product_id].append((
-                _as_datetime(ritem.return_record.accepted_at), 0, "purchase_return", -ritem.quantity, None,
+            batch = ritem.purchase_item
+            unit_cost = batch.total_price / batch.quantity if batch.quantity else batch.unit_price
+            events_by_product[batch.product_id].append((
+                _as_datetime(ritem.return_record.accepted_at), 1, "purchase_return", -ritem.quantity, unit_cost,
             ))
 
         sales_returns = ReturnItem.objects.filter(
@@ -137,6 +156,7 @@ class Command(BaseCommand):
 
         seeded = 0
         mismatches = []
+        changes = []
         for inv in inventories:
             events = events_by_product.get(inv.product_id, [])
             # Sort by (timestamp, cost-events-last-on-ties) — a same-day
@@ -149,26 +169,49 @@ class Command(BaseCommand):
             qty = Decimal("0")
             avg = Decimal("0")
             for _ts, _tiebreak, kind, delta, cost in events:
-                if kind == "purchase":
+                if kind in ("purchase", "purchase_return"):
+                    # Same unified formula as purchases.services
+                    # .sync_inventory — algebraically identical for a
+                    # purchase (delta > 0) and a purchase return
+                    # (delta < 0, cost = that specific batch's own cost).
                     batch_qty = Decimal(delta)
-                    avg = ((avg * qty) + (cost * batch_qty)) / (qty + batch_qty)
-                    qty += batch_qty
+                    new_qty = qty + batch_qty
+                    avg = ((avg * qty) + (cost * batch_qty)) / new_qty if new_qty > 0 else Decimal("0")
+                    avg = avg.quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+                    qty = max(Decimal("0"), new_qty)
                 else:
                     qty = max(Decimal("0"), qty + Decimal(delta))
 
-            inv.avg_unit_cost = avg
-            inv.save(update_fields=["avg_unit_cost"])
+            if avg != inv.avg_unit_cost:
+                changes.append((inv.product_id, inv.avg_unit_cost, avg))
+
+            if not dry_run:
+                inv.avg_unit_cost = avg
+                inv.save(update_fields=["avg_unit_cost"])
             seeded += 1
 
             if qty != Decimal(inv.quantity):
                 mismatches.append((inv.product_id, qty, inv.quantity))
 
-        self.stdout.write(self.style.SUCCESS(f"Reconstructed avg_unit_cost for {seeded} product(s)."))
+        if dry_run:
+            self.stdout.write(self.style.WARNING(
+                f"DRY RUN — nothing written. {len(changes)} of {seeded} product(s) with stock "
+                f"would have their avg_unit_cost changed by a --force run:"
+            ))
+            product_names = {
+                p.id: p.name for p in
+                Product.objects.filter(id__in=[pid for pid, _, _ in changes])
+            }
+            for pid, old, new in changes:
+                name = product_names.get(pid, f"id={pid}")
+                self.stdout.write(f"  {name}: {old} -> {new}")
+        else:
+            self.stdout.write(self.style.SUCCESS(f"Reconstructed avg_unit_cost for {seeded} product(s)."))
         if mismatches:
+            written_note = "nothing was written (dry run)" if dry_run else "avg_unit_cost was still written (best available reconstruction)"
             self.stdout.write(self.style.WARNING(
                 f"{len(mismatches)} product(s) had a replayed quantity that didn't match "
-                f"the real Inventory.quantity — avg_unit_cost was still written (best "
-                f"available reconstruction), but review these for a missing event source "
-                f"or pre-existing data issue: "
+                f"the real Inventory.quantity — {written_note}, but review these for a "
+                f"missing event source or pre-existing data issue: "
                 + ", ".join(f"product {pid} (replayed {rq} vs actual {aq})" for pid, rq, aq in mismatches)
             ))

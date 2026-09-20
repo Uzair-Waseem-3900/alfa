@@ -266,6 +266,13 @@ class FIFOLedger(models.Model):
     )
     unit_cost    = models.DecimalField(max_digits=14, decimal_places=4)
     created_at   = models.DateTimeField(auto_now_add=True)
+    # Set only on a negative (reversal) entry — points back at the exact
+    # original positive layer it restored, so a later return on the same
+    # invoice_item can tell how much of THAT layer is still outstanding
+    # instead of assuming the layer's full original quantity is available.
+    reverses     = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="reversal_entries",
+    )
 
     class Meta:
         verbose_name = "FIFO Ledger"

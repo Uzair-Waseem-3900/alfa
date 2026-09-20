@@ -486,6 +486,112 @@ class ReturnEditCancelTests(BillingTestBase):
         self.assertLess(len(ctx.captured_queries), 12)
 
 
+class FIFOReversalRepeatReturnTests(BillingTestBase):
+    """
+    _reverse_fifo must restore each FIFOLedger layer only up to what's
+    STILL outstanding on it, not its original draw size — otherwise a
+    second/later return against the same invoice_item over-credits
+    whichever batch it revisits (and under-credits another), corrupting
+    per-batch remaining_quantity even though the aggregate nets out.
+    """
+
+    def make_two_batch_product(self):
+        """
+        One product, stocked via two separate purchase orders (different
+        unit costs) so a single invoice line's FIFO draw spans both
+        batches — batch A (older, cheaper) then batch B (newer, pricier).
+        """
+        product = Product.objects.create(
+            name="Two Batch Product", code="TBP", category=self.category,
+        )
+        create_rate(product_id=product.id, selling_price=Decimal("100"), user=self.admin)
+
+        order_a = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 6, "unit_price": Decimal("50")}],
+            user=self.admin,
+        )
+        for item in order_a.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order_a.id, user=self.admin)
+
+        order_b = create_purchase_order(
+            supplier_id=self.supplier.id,
+            items=[{"product_id": product.id, "quantity": 4, "unit_price": Decimal("80")}],
+            user=self.admin,
+        )
+        for item in order_b.items.all():
+            set_purchase_item_shelf_allocations(
+                purchase_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        confirm_purchase_order(order_id=order_b.id, user=self.admin)
+
+        batch_a = order_a.items.first()
+        batch_b = order_b.items.first()
+        return product, batch_a, batch_b
+
+    def test_second_partial_return_does_not_over_credit_the_revisited_batch(self):
+        product, batch_a, batch_b = self.make_two_batch_product()
+        invoice = self.make_confirmed_invoice(product, quantity=10)  # draws all of A (6) then all of B (4)
+        item = invoice.items.first()
+
+        # First return: 3 units — restores into batch B only (newest first).
+        ret_1 = create_return(invoice_id=invoice.id,
+                               items=[{"invoice_item_id": item.id, "quantity": 3}],
+                               user=self.admin)
+        self.allocate_return_items(ret_1)
+        accept_return(return_id=ret_1.id, user=self.admin)
+
+        batch_a.refresh_from_db()
+        batch_b.refresh_from_db()
+        self.assertEqual(batch_a.remaining_quantity, 0)
+        self.assertEqual(batch_b.remaining_quantity, 3)
+
+        # Second, later return: 5 more units (8 of 10 total returned so
+        # far — still within returnable_quantity). Correct behavior: only
+        # 1 more unit is still outstanding on batch B (4 - 3 already
+        # restored), so 1 goes to B and the remaining 4 go to batch A.
+        item.refresh_from_db()
+        self.assertEqual(item.returnable_quantity, 7)
+        ret_2 = create_return(invoice_id=invoice.id,
+                               items=[{"invoice_item_id": item.id, "quantity": 5}],
+                               user=self.admin)
+        self.allocate_return_items(ret_2)
+        accept_return(return_id=ret_2.id, user=self.admin)
+
+        batch_a.refresh_from_db()
+        batch_b.refresh_from_db()
+        self.assertEqual(batch_b.remaining_quantity, 4)  # capped at its own original quantity, never over-credited
+        self.assertEqual(batch_a.remaining_quantity, 4)
+        # Aggregate is a necessary but not sufficient check — the bug this
+        # guards against nets out in aggregate while corrupting the
+        # per-batch split, so both totals must hold together.
+        self.assertEqual(batch_a.remaining_quantity + batch_b.remaining_quantity, 8)
+
+    def test_returning_full_quantity_across_multiple_events_exactly_restores_both_batches(self):
+        product, batch_a, batch_b = self.make_two_batch_product()
+        invoice = self.make_confirmed_invoice(product, quantity=10)
+        item = invoice.items.first()
+
+        for qty in (2, 3, 5):  # three separate return events, summing to all 10 units
+            ret = create_return(invoice_id=invoice.id,
+                                 items=[{"invoice_item_id": item.id, "quantity": qty}],
+                                 user=self.admin)
+            self.allocate_return_items(ret)
+            accept_return(return_id=ret.id, user=self.admin)
+
+        batch_a.refresh_from_db()
+        batch_b.refresh_from_db()
+        self.assertEqual(batch_a.remaining_quantity, 6)  # back to exactly its original stock
+        self.assertEqual(batch_b.remaining_quantity, 4)
+
+
 class ProfitFieldVisibilityTests(BillingTestBase):
     """
     cogs_per_unit/line_cogs/line_profit/total_cogs (invoices) and

@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from django.db import transaction
+from django.db.models import Sum
 from django.utils import timezone
 
 DEFAULT_DUE_DATE_DAYS = 7
@@ -292,18 +293,32 @@ def _reverse_fifo(*, invoice_item: InvoiceItem, return_quantity: int) -> None:
         if remaining_to_restore <= 0:
             break
 
-        restore = min(layer.quantity, remaining_to_restore)
+        # A layer's original `quantity` is only the ceiling for its FIRST
+        # restore. A prior return event on this same invoice_item may have
+        # already restored part of this exact layer (reversal_entries) —
+        # net that off so a second/later return doesn't re-credit the same
+        # units to this batch again (which would silently over-credit this
+        # batch and under-credit an older one, drifting inventory value).
+        already_reversed = layer.reversal_entries.aggregate(
+            total=Sum("quantity"))["total"] or 0  # reversal quantities are negative
+        available = layer.quantity + already_reversed
+        if available <= 0:
+            continue
+
+        restore = min(available, remaining_to_restore)
 
         # Restore remaining_quantity on the purchase batch
         layer.purchase.remaining_quantity += restore
         layer.purchase.save(update_fields=["remaining_quantity"])
 
-        # Append a negative ledger entry for audit trail
+        # Append a negative ledger entry for audit trail, tied back to the
+        # exact original layer it reversed.
         FIFOLedger.objects.create(
             invoice_item=invoice_item,
             purchase=layer.purchase,
             quantity=-restore,
             unit_cost=layer.unit_cost,
+            reverses=layer,
         )
 
         remaining_to_restore -= restore

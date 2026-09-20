@@ -91,26 +91,26 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 
 
-# DATABASES = {
-#     "default": {
-#         "ENGINE": "django.db.backends.sqlite3",
-#         "NAME": BASE_DIR / "db.sqlite3",
-#     }
-# }
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.getenv("DB_NAME"),
-        "USER": os.getenv("DB_USER"),
-        "PASSWORD": os.getenv("DB_PASSWORD"),
-        "HOST": os.getenv("DB_HOST"),
-        "PORT": os.getenv("DB_PORT"),
-        # Reuse a connection to the Supabase Session Pooler for 120s instead
-        # of paying a fresh TCP+TLS+auth handshake on every request (the
-        # dominant cost behind the ~6s customer-list load — see chat).
-        "CONN_MAX_AGE": 120,
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.postgresql",
+#         "NAME": os.getenv("DB_NAME"),
+#         "USER": os.getenv("DB_USER"),
+#         "PASSWORD": os.getenv("DB_PASSWORD"),
+#         "HOST": os.getenv("DB_HOST"),
+#         "PORT": os.getenv("DB_PORT"),
+#         # Reuse a connection to the Supabase Session Pooler for 120s instead
+#         # of paying a fresh TCP+TLS+auth handshake on every request (the
+#         # dominant cost behind the ~6s customer-list load — see chat).
+#         "CONN_MAX_AGE": 120,
+#     }
+# }
 
 
 # Remote backup target (Supabase/Neon/any Postgres) — read from

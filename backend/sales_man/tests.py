@@ -22,7 +22,7 @@ from .services import (
     delete_link_name,
     delete_sales_man,
 )
-from .views import SalesManListCreateView
+from .views import SalesManListCreateView, SalesManRetrieveUpdateDestroyView
 
 
 def make_admin(email="admin@example.com"):
@@ -260,3 +260,39 @@ class BackfillCommandTests(TestCase):
         self.assertEqual(sm2.total_customers, 1)
         self.c_fsd_wrong_prefix.refresh_from_db()
         self.assertEqual(self.c_fsd_wrong_prefix.code, "ALFA-FSD-777")
+
+
+class SalesManUpdateViewTests(TestCase):
+    """
+    Regression tests for the "PATCHing a sales man with its own unchanged
+    code fails validation" bug — the view built its serializer without an
+    instance, so DRF's UniqueValidator on `code` had no self to exclude.
+    """
+
+    def setUp(self):
+        self.factory = APIRequestFactory()
+        self.admin = make_admin()
+        self.sm = create_sales_man(name="sale_man_1", code="SM1", address="old addr", phone="0300", user=self.admin)
+
+    def _patch(self, data):
+        request = self.factory.patch(f"/api/sales-man/sales-men/{self.sm.id}/", data)
+        force_authenticate(request, user=self.admin)
+        return SalesManRetrieveUpdateDestroyView.as_view()(request, pk=self.sm.id)
+
+    def test_updating_name_only_does_not_trip_code_uniqueness(self):
+        response = self._patch({"name": "sale_man_1_renamed"})
+        self.assertEqual(response.status_code, 200)
+        self.sm.refresh_from_db()
+        self.assertEqual(self.sm.name, "sale_man_1_renamed")
+        self.assertEqual(self.sm.code, "SM1")
+
+    def test_updating_with_own_unchanged_code_succeeds(self):
+        response = self._patch({"code": "SM1", "phone": "0311"})
+        self.assertEqual(response.status_code, 200)
+        self.sm.refresh_from_db()
+        self.assertEqual(self.sm.phone, "0311")
+
+    def test_updating_to_another_sales_man_s_code_still_rejected(self):
+        create_sales_man(name="sale_man_2", code="SM2", user=self.admin)
+        response = self._patch({"code": "SM2"})
+        self.assertEqual(response.status_code, 400)

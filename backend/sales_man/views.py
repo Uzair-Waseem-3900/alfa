@@ -57,7 +57,13 @@ class SalesManRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
         return get_sales_man_by_id(self.kwargs["pk"])
 
     def update(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data, partial=True)
+        # Passing the instance is required so DRF's auto-generated
+        # UniqueValidator on `code` (from the model's unique=True) excludes
+        # THIS row from its own uniqueness check — without it, PATCHing a
+        # sales man with its own unchanged code always failed validation
+        # before update_sales_man's own (correct) .exclude(pk=pk) check was
+        # ever reached. Mirrors billing.views.CustomerRetrieveUpdateDestroyView.
+        serializer = self.get_serializer(self.get_object(), data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         sales_man = update_sales_man(pk=self.kwargs["pk"], user=request.user, **serializer.validated_data)
         return Response(SalesManReadSerializer(sales_man).data)

@@ -10,21 +10,24 @@ from rest_framework.test import APIRequestFactory, force_authenticate
 from billing.models import Invoice
 from billing.services import (
     accept_return, confirm_invoice, create_customer, create_invoice,
-    create_return, set_invoice_item_shelf_allocations,
+    create_payment, create_return, set_invoice_item_shelf_allocations,
     set_return_item_shelf_allocations,
 )
 from purchases.models import Category, LostInventoryRecord, Product, Shelf
+from payment_methods.models import PaymentMethod
 from purchases.services import (
     accept_purchase_return, confirm_purchase_order, create_lost_inventory_record,
     create_purchase_order, create_purchase_return, create_supplier,
     set_purchase_item_shelf_allocations, set_purchase_return_item_shelf_allocations,
 )
 from rates.services import create_rate
+from sales_man.services import create_link_name, create_sales_man
 from users.models import User
 
 from .views import (
+    CashCollectedReportView, CustomerReturnsReportView, ExpensesReportPrintView,
     InvoicesReportView, InventoryValuationReportView, LostInventoryReportView,
-    StockMovementReportView,
+    ProfitMarginReportView, StockMovementReportView,
 )
 
 
@@ -543,3 +546,239 @@ class SearchTests(ReportsTestBase):
         grown_count = len(ctx_grown.captured_queries)
 
         self.assertEqual(baseline_count, grown_count)
+
+
+class SalesManReportFilterTests(ReportsTestBase):
+    """
+    Invoices/Cash Collected/Customer Returns/Profit-Margin reports each
+    accept sales_man_id and sales_man_link_name_id, combinable with the
+    existing date filters (AND) and with each other.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.sm1 = create_sales_man(name="sale_man_1", code="SM1", user=self.admin)
+        self.sm2 = create_sales_man(name="sale_man_2", code="SM2", user=self.admin)
+        self.link_fsd = create_link_name(sales_man_id=self.sm1.id, name="FSD", user=self.admin)
+        self.link_loh = create_link_name(sales_man_id=self.sm1.id, name="LOH", user=self.admin)
+        self.link_os = create_link_name(sales_man_id=self.sm2.id, name="OS", user=self.admin)
+
+        self.cust_fsd = create_customer(
+            name="FSD Cust", sales_man_link_name_id=self.link_fsd.id, code_suffix="001",
+            address="x", user=self.admin,
+        )
+        self.cust_loh = create_customer(
+            name="LOH Cust", sales_man_link_name_id=self.link_loh.id, code_suffix="001",
+            address="x", user=self.admin,
+        )
+        self.cust_os = create_customer(
+            name="OS Cust", sales_man_link_name_id=self.link_os.id, code_suffix="001",
+            address="x", user=self.admin,
+        )
+
+    def _confirmed_invoice_for(self, customer, product, quantity=2):
+        invoice = create_invoice(
+            customer_id=customer.id, items=[{"product_id": product.id, "quantity": quantity}],
+            user=self.admin,
+        )
+        for item in invoice.items.all():
+            set_invoice_item_shelf_allocations(
+                invoice_item_id=item.id,
+                allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}],
+                user=self.admin,
+            )
+        return confirm_invoice(invoice_id=invoice.id, user=self.admin)
+
+    def test_invoices_report_scopes_by_sales_man_and_link_name(self):
+        product = self.make_stocked_product(stock=20)
+        inv_fsd = self._confirmed_invoice_for(self.cust_fsd, product)
+        inv_loh = self._confirmed_invoice_for(self.cust_loh, product)
+        inv_os = self._confirmed_invoice_for(self.cust_os, product)
+
+        request = self.factory.get("/reports/invoices/", {"sales_man_id": self.sm1.id})
+        force_authenticate(request, user=self.admin)
+        response = InvoicesReportView.as_view()(request)
+        ids = {r["id"] for r in response.data["results"]}
+        self.assertEqual(ids, {inv_fsd.id, inv_loh.id})
+        self.assertEqual(response.data["stats"]["total_invoices"], 2)
+
+        # Narrowed further by link name — only FSD's own customer.
+        request = self.factory.get(
+            "/reports/invoices/", {"sales_man_id": self.sm1.id, "sales_man_link_name_id": self.link_fsd.id},
+        )
+        force_authenticate(request, user=self.admin)
+        response = InvoicesReportView.as_view()(request)
+        ids = {r["id"] for r in response.data["results"]}
+        self.assertEqual(ids, {inv_fsd.id})
+
+        # sm2 never touches sm1's invoices.
+        request = self.factory.get("/reports/invoices/", {"sales_man_id": self.sm2.id})
+        force_authenticate(request, user=self.admin)
+        response = InvoicesReportView.as_view()(request)
+        ids = {r["id"] for r in response.data["results"]}
+        self.assertEqual(ids, {inv_os.id})
+
+    def test_invoices_report_combines_sales_man_with_date_filter(self):
+        product = self.make_stocked_product(stock=20)
+        inv_fsd = self._confirmed_invoice_for(self.cust_fsd, product)
+        Invoice.objects.filter(pk=inv_fsd.pk).update(
+            confirmed_at=timezone.make_aware(datetime.combine(date(2026, 5, 1), time(12, 0))),
+        )
+        inv_loh = self._confirmed_invoice_for(self.cust_loh, product)
+        Invoice.objects.filter(pk=inv_loh.pk).update(
+            confirmed_at=timezone.make_aware(datetime.combine(date(2026, 5, 5), time(12, 0))),
+        )
+
+        request = self.factory.get(
+            "/reports/invoices/", {"sales_man_id": self.sm1.id, "date": "2026-05-01"},
+        )
+        force_authenticate(request, user=self.admin)
+        response = InvoicesReportView.as_view()(request)
+        ids = {r["id"] for r in response.data["results"]}
+        self.assertEqual(ids, {inv_fsd.id})
+
+    def test_cash_collected_report_scopes_by_sales_man(self):
+        cash = PaymentMethod.objects.get_or_create(name="Cash", defaults={"balance": Decimal("1000000")})[0]
+        product = self.make_stocked_product(stock=20)
+        inv_fsd = self._confirmed_invoice_for(self.cust_fsd, product)
+        inv_os = self._confirmed_invoice_for(self.cust_os, product)
+        create_payment(
+            invoice_id=inv_fsd.id, amount=Decimal("50"), method_allocations=[(cash, Decimal("50"))],
+            payment_date=date(2026, 1, 1), user=self.admin,
+        )
+        create_payment(
+            invoice_id=inv_os.id, amount=Decimal("30"), method_allocations=[(cash, Decimal("30"))],
+            payment_date=date(2026, 1, 1), user=self.admin,
+        )
+
+        request = self.factory.get("/reports/cash-collected/", {"sales_man_id": self.sm1.id})
+        force_authenticate(request, user=self.admin)
+        response = CashCollectedReportView.as_view()(request)
+        self.assertEqual(response.data["stats"]["total_payments"], 1)
+        self.assertEqual(Decimal(response.data["stats"]["total_cash_collected"]), Decimal("50"))
+
+    def test_customer_returns_report_scopes_by_sales_man(self):
+        product = self.make_stocked_product(stock=20)
+        inv_fsd = self._confirmed_invoice_for(self.cust_fsd, product, quantity=4)
+        inv_os = self._confirmed_invoice_for(self.cust_os, product, quantity=4)
+
+        def accept_one_return(invoice):
+            item = invoice.items.first()
+            ret = create_return(
+                invoice_id=invoice.id, items=[{"invoice_item_id": item.id, "quantity": 1}], user=self.admin,
+            )
+            for ri in ret.items.all():
+                set_return_item_shelf_allocations(
+                    return_item_id=ri.id, allocations=[{"shelf_id": self.shelf.id, "quantity": ri.quantity}],
+                    user=self.admin,
+                )
+            return accept_return(return_id=ret.id, user=self.admin)
+
+        accept_one_return(inv_fsd)
+        accept_one_return(inv_os)
+
+        request = self.factory.get("/reports/customer-returns/", {"sales_man_id": self.sm1.id})
+        force_authenticate(request, user=self.admin)
+        response = CustomerReturnsReportView.as_view()(request)
+        self.assertEqual(response.data["stats"]["total_returns"], 1)
+
+    def test_profit_margin_report_gross_and_net_stay_scoped_together(self):
+        """
+        Regression guard: sales_man_id must reach BOTH halves of the profit
+        margin stats (gross from invoices, net-of-returns from
+        get_customer_returns_report_queryset) — otherwise net could include
+        another sales man's returns while gross stays scoped.
+        """
+        product = self.make_stocked_product(stock=20)
+        inv_fsd = self._confirmed_invoice_for(self.cust_fsd, product, quantity=4)
+        inv_os = self._confirmed_invoice_for(self.cust_os, product, quantity=4)
+
+        def accept_one_return(invoice):
+            item = invoice.items.first()
+            ret = create_return(
+                invoice_id=invoice.id, items=[{"invoice_item_id": item.id, "quantity": 1}], user=self.admin,
+            )
+            for ri in ret.items.all():
+                set_return_item_shelf_allocations(
+                    return_item_id=ri.id, allocations=[{"shelf_id": self.shelf.id, "quantity": ri.quantity}],
+                    user=self.admin,
+                )
+            return accept_return(return_id=ret.id, user=self.admin)
+
+        accept_one_return(inv_fsd)
+        accept_one_return(inv_os)  # different sales man — must NOT leak into sm1's net figures
+
+        request = self.factory.get("/reports/profit-margin/", {"sales_man_id": self.sm1.id})
+        force_authenticate(request, user=self.admin)
+        response = ProfitMarginReportView.as_view()(request)
+        stats = response.data["stats"]
+        self.assertEqual(stats["total_invoices"], 1)
+        # net_revenue = gross revenue (fsd only) minus fsd's OWN return only
+        # (1 unit returned at the 100/unit selling price snapshotted on the
+        # invoice item) — sm2's return must NOT be subtracted here.
+        expected_net_revenue = inv_fsd.grand_total - Decimal("100")
+        self.assertEqual(Decimal(stats["net_revenue"]), expected_net_revenue)
+
+    def test_unrelated_print_view_ignores_sales_man_param(self):
+        """
+        A report that does NOT support sales-man scoping (Expenses) must
+        silently ignore the param rather than crash — proves
+        supports_sales_man_filter correctly isolates the 4 opted-in reports
+        from the other print views sharing BaseReportPrintView.
+        """
+        request = self.factory.get("/reports/expenses/print/", {"sales_man_id": self.sm1.id})
+        force_authenticate(request, user=self.admin)
+        response = ExpensesReportPrintView.as_view()(request)
+        self.assertEqual(response.status_code, 200)
+
+    def test_invoices_report_query_count_stable_with_sales_man_filter(self):
+        product = self.make_stocked_product(stock=20)
+        for _ in range(5):
+            self._confirmed_invoice_for(self.cust_fsd, product, quantity=1)
+
+        request = self.factory.get("/reports/invoices/", {"sales_man_id": self.sm1.id, "page_size": 25})
+        force_authenticate(request, user=self.admin)
+        with CaptureQueriesContext(connection) as ctx:
+            InvoicesReportView.as_view()(request)
+        # A handful of fixed queries (count, page, select_related joins) —
+        # not proportional to the number of matching invoices.
+        self.assertLess(len(ctx.captured_queries), 10)
+
+    def test_cash_collected_and_customer_returns_query_counts_stable_with_sales_man_filter(self):
+        """
+        Both selectors added a new join hop (Payment->Invoice->Customer,
+        Return->Invoice->Customer) for the sales-man filter — pin that this
+        stays a fixed, small query count rather than growing with row count.
+        """
+        cash = PaymentMethod.objects.get_or_create(name="Cash", defaults={"balance": Decimal("1000000")})[0]
+        product = self.make_stocked_product(stock=20)
+        for _ in range(5):
+            inv = self._confirmed_invoice_for(self.cust_fsd, product, quantity=1)
+            create_payment(
+                invoice_id=inv.id, amount=Decimal("10"), method_allocations=[(cash, Decimal("10"))],
+                payment_date=date(2026, 1, 1), user=self.admin,
+            )
+
+        request = self.factory.get("/reports/cash-collected/", {"sales_man_id": self.sm1.id, "page_size": 25})
+        force_authenticate(request, user=self.admin)
+        with CaptureQueriesContext(connection) as ctx:
+            CashCollectedReportView.as_view()(request)
+        self.assertLess(len(ctx.captured_queries), 10)
+
+        request = self.factory.get("/reports/customer-returns/", {"sales_man_id": self.sm1.id, "page_size": 25})
+        force_authenticate(request, user=self.admin)
+        with CaptureQueriesContext(connection) as ctx:
+            CustomerReturnsReportView.as_view()(request)
+        self.assertLess(len(ctx.captured_queries), 10)
+
+    def test_print_view_without_sales_man_support_never_describes_it(self):
+        """
+        Regression guard for the audit-found bug: a report that ignores
+        sales_man_id in its actual data must not claim in the PDF header
+        that it was scoped to that sales man.
+        """
+        from .views import _describe_filters
+
+        query_params = {"sales_man_id": str(self.sm1.id)}
+        self.assertNotIn("Sales man", _describe_filters(query_params, supports_sales_man_filter=False))
+        self.assertIn("Sales man", _describe_filters(query_params, supports_sales_man_filter=True))

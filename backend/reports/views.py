@@ -62,6 +62,7 @@ from .serializers import (
     PurchaseReturnReportItemSerializer,
     RecurringExpenseReportItemSerializer,
     ReportDateFilterSerializer,
+    ReportSalesManFilterSerializer,
     StockMovementReportItemSerializer,
 )
 
@@ -75,6 +76,25 @@ def _has_date_filter(request) -> bool:
     """
     p = request.query_params
     return bool(p.get("date") or p.get("date_from") or p.get("date_to"))
+
+
+def _has_sales_man_filter(request) -> bool:
+    """
+    True if the caller supplied sales_man_id or sales_man_link_name_id.
+    Used only by the 4 reports that support this scoping — the pre-synced
+    CashFlow "all time" totals are global and can't represent a sales-man
+    scope, so this filter must ALSO force the live-aggregate stats path,
+    not just the date filter (see _has_date_filter).
+    """
+    p = request.query_params
+    return bool(p.get("sales_man_id") or p.get("sales_man_link_name_id"))
+
+
+def _get_sales_man_filters(request) -> dict:
+    """Validated {sales_man_id, sales_man_link_name_id} for the 4 reports that support it."""
+    filters = ReportSalesManFilterSerializer(data=request.query_params)
+    filters.is_valid(raise_exception=True)
+    return filters.validated_data
 
 
 class InvoicesReportView(generics.ListAPIView):
@@ -98,14 +118,14 @@ class InvoicesReportView(generics.ListAPIView):
     def get_queryset(self):
         filters = ReportDateFilterSerializer(data=self.request.query_params)
         filters.is_valid(raise_exception=True)
-        return get_invoices_report_queryset(**filters.validated_data)
+        return get_invoices_report_queryset(**filters.validated_data, **_get_sales_man_filters(self.request))
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         # No filter → read the pre-synced CashFlow total (instant at any scale).
         # Filtered → stats computed over the FULL filtered queryset, before
         # pagination slices it down to one page.
-        if _has_date_filter(request):
+        if _has_date_filter(request) or _has_sales_man_filter(request):
             stats = get_invoices_report_stats(queryset)
         else:
             stats = get_invoices_report_stats_all_time()
@@ -138,11 +158,11 @@ class CashCollectedReportView(generics.ListAPIView):
     def get_queryset(self):
         filters = ReportDateFilterSerializer(data=self.request.query_params)
         filters.is_valid(raise_exception=True)
-        return get_cash_collected_report_queryset(**filters.validated_data)
+        return get_cash_collected_report_queryset(**filters.validated_data, **_get_sales_man_filters(self.request))
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        if _has_date_filter(request):
+        if _has_date_filter(request) or _has_sales_man_filter(request):
             stats = get_cash_collected_report_stats(queryset)
         else:
             stats = get_cash_collected_report_stats_all_time()
@@ -286,11 +306,11 @@ class CustomerReturnsReportView(generics.ListAPIView):
     def get_queryset(self):
         filters = ReportDateFilterSerializer(data=self.request.query_params)
         filters.is_valid(raise_exception=True)
-        return get_customer_returns_report_queryset(**filters.validated_data)
+        return get_customer_returns_report_queryset(**filters.validated_data, **_get_sales_man_filters(self.request))
 
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
-        if _has_date_filter(request):
+        if _has_date_filter(request) or _has_sales_man_filter(request):
             stats = get_customer_returns_report_stats(queryset)
         else:
             stats = get_customer_returns_report_stats_all_time()
@@ -327,16 +347,24 @@ class ProfitMarginReportView(generics.ListAPIView):
     serializer_class   = ProfitMarginReportItemSerializer
 
     def get_queryset(self):
+        # Only used by DRF machinery outside list() (e.g. schema generation) —
+        # list() below computes filters itself once and never calls this, to
+        # avoid validating the same query params twice per request.
         filters = ReportDateFilterSerializer(data=self.request.query_params)
         filters.is_valid(raise_exception=True)
-        return get_profit_margin_report_queryset(**filters.validated_data)
+        return get_profit_margin_report_queryset(**filters.validated_data, **_get_sales_man_filters(self.request))
 
     def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        if _has_date_filter(request):
-            filters = ReportDateFilterSerializer(data=request.query_params)
-            filters.is_valid(raise_exception=True)
-            stats = get_profit_margin_report_stats(queryset, **filters.validated_data)
+        date_filters = ReportDateFilterSerializer(data=request.query_params)
+        date_filters.is_valid(raise_exception=True)
+        sales_man_filters = _get_sales_man_filters(request)
+
+        queryset = get_profit_margin_report_queryset(**date_filters.validated_data, **sales_man_filters)
+
+        if _has_date_filter(request) or _has_sales_man_filter(request):
+            stats = get_profit_margin_report_stats(
+                queryset, **date_filters.validated_data, **sales_man_filters,
+            )
         else:
             stats = get_profit_margin_report_stats_all_time()
 
@@ -641,19 +669,43 @@ class AssetDepreciationReportView(generics.ListAPIView):
 # result set at once, by design).
 # ---------------------------------------------------------------------------
 
-def _describe_filters(query_params) -> str:
+def _describe_filters(query_params, *, supports_sales_man_filter: bool = False) -> str:
+    """
+    supports_sales_man_filter must match the calling view's own flag —
+    otherwise a sales_man_id/sales_man_link_name_id param that a given
+    report's selector silently ignores (e.g. Expenses) would still get
+    described in the PDF header as if the report were actually scoped to
+    it, disagreeing with the real (unfiltered) data underneath.
+    """
     date      = query_params.get("date")
     date_from = query_params.get("date_from")
     date_to   = query_params.get("date_to")
     if date:
-        return f"Exact date: {date}"
-    if date_from and date_to:
-        return f"From {date_from} to {date_to}"
-    if date_from:
-        return f"From {date_from} onward"
-    if date_to:
-        return f"Up to {date_to}"
-    return "All records — no filter applied"
+        parts = [f"Exact date: {date}"]
+    elif date_from and date_to:
+        parts = [f"From {date_from} to {date_to}"]
+    elif date_from:
+        parts = [f"From {date_from} onward"]
+    elif date_to:
+        parts = [f"Up to {date_to}"]
+    else:
+        parts = []
+
+    if supports_sales_man_filter:
+        sales_man_id = query_params.get("sales_man_id")
+        link_name_id = query_params.get("sales_man_link_name_id")
+        if sales_man_id:
+            from sales_man.models import SalesMan
+            sales_man = SalesMan.objects.filter(pk=sales_man_id, is_deleted=False).first()
+            if sales_man:
+                parts.append(f"Sales man: {sales_man.name}")
+        if link_name_id:
+            from sales_man.models import SalesManLinkName
+            link_name = SalesManLinkName.objects.filter(pk=link_name_id, is_deleted=False).first()
+            if link_name:
+                parts.append(f"Link name: {link_name.name}")
+
+    return " — ".join(parts) if parts else "All records — no filter applied"
 
 
 def _humanize(key: str) -> str:
@@ -666,6 +718,10 @@ class BaseReportPrintView(APIView):
     stats_fn/stats_all_time_fn/serializer_class and inherit this get().
     stats_needs_filters=True is only for Profit Margin, whose stats function
     also needs the raw date filters (see get_profit_margin_report_stats).
+    supports_sales_man_filter=True is only for the 4 reports that accept
+    sales_man_id/sales_man_link_name_id (Invoices, Cash Collected, Customer
+    Returns, Profit/Margin) — keeps every OTHER print view's queryset_fn
+    from receiving kwargs it was never written to accept.
     """
     permission_classes  = [IsAdminOrSuperuser]
     title               = None
@@ -675,16 +731,26 @@ class BaseReportPrintView(APIView):
     stats_all_time_fn   = None
     serializer_class    = None
     stats_needs_filters = False
+    supports_sales_man_filter = False
 
     def get(self, request):
         filters_serializer = ReportDateFilterSerializer(data=request.query_params)
         filters_serializer.is_valid(raise_exception=True)
         filters = filters_serializer.validated_data
 
-        queryset = self.queryset_fn(**filters)
+        sales_man_filters = _get_sales_man_filters(request) if self.supports_sales_man_filter else {}
+        queryset = self.queryset_fn(**filters, **sales_man_filters)
 
-        if request.query_params.get("date") or request.query_params.get("date_from") or request.query_params.get("date_to"):
-            stats = self.stats_fn(queryset, **filters) if self.stats_needs_filters else self.stats_fn(queryset)
+        has_filter = (
+            request.query_params.get("date") or request.query_params.get("date_from")
+            or request.query_params.get("date_to")
+            or (self.supports_sales_man_filter and _has_sales_man_filter(request))
+        )
+        if has_filter:
+            stats = (
+                self.stats_fn(queryset, **filters, **sales_man_filters) if self.stats_needs_filters
+                else self.stats_fn(queryset)
+            )
         else:
             stats = self.stats_all_time_fn()
 
@@ -692,7 +758,9 @@ class BaseReportPrintView(APIView):
 
         pdf_bytes, filename = generate_report_pdf_bytes(
             title=self.title,
-            filter_description=_describe_filters(request.query_params),
+            filter_description=_describe_filters(
+                request.query_params, supports_sales_man_filter=self.supports_sales_man_filter,
+            ),
             columns=self.columns,
             rows=rows,
             stats=[{"label": _humanize(k), "value": v} for k, v in stats.items()],
@@ -713,6 +781,7 @@ class InvoicesReportPrintView(BaseReportPrintView):
     stats_fn          = staticmethod(get_invoices_report_stats)
     stats_all_time_fn = staticmethod(get_invoices_report_stats_all_time)
     serializer_class  = InvoiceReportItemSerializer
+    supports_sales_man_filter = True
 
 
 class CashCollectedReportPrintView(BaseReportPrintView):
@@ -726,6 +795,7 @@ class CashCollectedReportPrintView(BaseReportPrintView):
     stats_fn          = staticmethod(get_cash_collected_report_stats)
     stats_all_time_fn = staticmethod(get_cash_collected_report_stats_all_time)
     serializer_class  = PaymentReportItemSerializer
+    supports_sales_man_filter = True
 
 
 class ExpensesReportPrintView(BaseReportPrintView):
@@ -781,6 +851,7 @@ class CustomerReturnsReportPrintView(BaseReportPrintView):
     stats_fn          = staticmethod(get_customer_returns_report_stats)
     stats_all_time_fn = staticmethod(get_customer_returns_report_stats_all_time)
     serializer_class  = CustomerReturnReportItemSerializer
+    supports_sales_man_filter = True
 
 
 class ProfitMarginReportPrintView(BaseReportPrintView):
@@ -796,6 +867,7 @@ class ProfitMarginReportPrintView(BaseReportPrintView):
     stats_all_time_fn   = staticmethod(get_profit_margin_report_stats_all_time)
     serializer_class    = ProfitMarginReportItemSerializer
     stats_needs_filters = True
+    supports_sales_man_filter = True
 
 
 class InputTaxReportPrintView(BaseReportPrintView):

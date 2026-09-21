@@ -50,16 +50,28 @@ def get_invoices_report_queryset(
     date      : str = None,
     date_from : str = None,
     date_to   : str = None,
+    sales_man_id           : str = None,
+    sales_man_link_name_id : str = None,
 ) -> QuerySet:
     """
     Non-draft invoices (confirmed/partial/returned — all real, finalized
     invoices), filtered by their confirmed_at date. `__date` lookups are
     evaluated in settings.TIME_ZONE (Asia/Karachi), so this already matches
     the local calendar day shown in the UI.
+
+    sales_man_id / sales_man_link_name_id are optional and combine with the
+    date filters (AND) — customer__sales_man_id and
+    customer__sales_man_link_name_id are both indexed FKs on Customer
+    (sales_man/models.py), so this is a normal indexed join, not a scan.
     """
     qs = Invoice.objects.filter(is_deleted=False, is_data_entry=False).exclude(
         status=Invoice.Status.DRAFT,
     ).select_related("customer").order_by("-confirmed_at")
+
+    if _clean(sales_man_id):
+        qs = qs.filter(customer__sales_man_id=_clean(sales_man_id))
+    if _clean(sales_man_link_name_id):
+        qs = qs.filter(customer__sales_man_link_name_id=_clean(sales_man_link_name_id))
 
     return _apply_datetime_range_filter(qs, field="confirmed_at", date=date, date_from=date_from, date_to=date_to)
 
@@ -96,10 +108,14 @@ def get_cash_collected_report_queryset(
     date      : str = None,
     date_from : str = None,
     date_to   : str = None,
+    sales_man_id           : str = None,
+    sales_man_link_name_id : str = None,
 ) -> QuerySet:
     """
     All payment collections (any method) — money that actually came in.
-    Filtered by payment_date.
+    Filtered by payment_date. sales_man_id/sales_man_link_name_id scope to
+    the invoice's customer (invoice__customer__...), combining with the date
+    filters via AND — same reasoning as get_invoices_report_queryset.
     """
     qs = Payment.objects.filter(
         is_deleted=False, amount__gt=0,
@@ -111,6 +127,10 @@ def get_cash_collected_report_queryset(
         qs = qs.filter(payment_date__gte=_clean(date_from))
     if _clean(date_to):
         qs = qs.filter(payment_date__lte=_clean(date_to))
+    if _clean(sales_man_id):
+        qs = qs.filter(invoice__customer__sales_man_id=_clean(sales_man_id))
+    if _clean(sales_man_link_name_id):
+        qs = qs.filter(invoice__customer__sales_man_link_name_id=_clean(sales_man_link_name_id))
 
     return qs
 
@@ -272,14 +292,24 @@ def get_customer_returns_report_queryset(
     date      : str = None,
     date_from : str = None,
     date_to   : str = None,
+    sales_man_id           : str = None,
+    sales_man_link_name_id : str = None,
 ) -> QuerySet:
     """
     Accepted returns from customers, filtered by accepted_at. Pending returns
     are excluded — their financial fields are still 0 until acceptance.
+    sales_man_id/sales_man_link_name_id scope via invoice__customer__... —
+    also reused by get_profit_margin_report_stats for its net-of-returns
+    figures, so pass the same two params there to keep both scoped together.
     """
     qs = Return.objects.filter(
         is_deleted=False, status=Return.Status.ACCEPTED,
     ).select_related("invoice__customer").order_by("-accepted_at")
+
+    if _clean(sales_man_id):
+        qs = qs.filter(invoice__customer__sales_man_id=_clean(sales_man_id))
+    if _clean(sales_man_link_name_id):
+        qs = qs.filter(invoice__customer__sales_man_link_name_id=_clean(sales_man_link_name_id))
 
     return _apply_datetime_range_filter(qs, field="accepted_at", date=date, date_from=date_from, date_to=date_to)
 
@@ -313,6 +343,8 @@ def get_profit_margin_report_queryset(
     date      : str = None,
     date_from : str = None,
     date_to   : str = None,
+    sales_man_id           : str = None,
+    sales_man_link_name_id : str = None,
 ) -> QuerySet:
     """
     Non-draft invoices, filtered by confirmed_at. grand_total/total_cogs/
@@ -322,16 +354,27 @@ def get_profit_margin_report_queryset(
     figures forever. get_profit_margin_report_stats() computes the net-of-
     returns figures separately, by subtracting accepted returns in the same
     date window — see that function's docstring.
+
+    sales_man_id/sales_man_link_name_id must ALSO be passed to
+    get_profit_margin_report_stats (which forwards them to the returns-side
+    aggregate) — otherwise "gross" would be scoped to one sales man while
+    "net" silently summed returns across everyone.
     """
     qs = Invoice.objects.filter(is_deleted=False, is_data_entry=False).exclude(
         status=Invoice.Status.DRAFT,
     ).select_related("customer").order_by("-confirmed_at")
+
+    if _clean(sales_man_id):
+        qs = qs.filter(customer__sales_man_id=_clean(sales_man_id))
+    if _clean(sales_man_link_name_id):
+        qs = qs.filter(customer__sales_man_link_name_id=_clean(sales_man_link_name_id))
 
     return _apply_datetime_range_filter(qs, field="confirmed_at", date=date, date_from=date_from, date_to=date_to)
 
 
 def get_profit_margin_report_stats(
     queryset: QuerySet, *, date: str = None, date_from: str = None, date_to: str = None,
+    sales_man_id: str = None, sales_man_link_name_id: str = None,
 ) -> dict:
     """
     Gross figures sum the filtered invoices directly (unaffected by returns,
@@ -339,7 +382,9 @@ def get_profit_margin_report_stats(
     every return ACCEPTED within the same date window — regardless of which
     invoice/period the original sale belongs to, matching how every other
     event in this app is recognized (at the moment it happens, not
-    retroactively reallocated to an earlier period).
+    retroactively reallocated to an earlier period). sales_man_id/
+    sales_man_link_name_id are forwarded to the returns-side query so gross
+    and net stay scoped to the same customer set.
     """
     invoice_totals = queryset.aggregate(
         total_invoices     = Count("id"),
@@ -350,6 +395,7 @@ def get_profit_margin_report_stats(
 
     return_totals = get_customer_returns_report_queryset(
         date=date, date_from=date_from, date_to=date_to,
+        sales_man_id=sales_man_id, sales_man_link_name_id=sales_man_link_name_id,
     ).aggregate(
         total_return_value = Coalesce(Sum("total_return_amount"), Decimal("0")),
         total_return_cogs  = Coalesce(Sum("total_return_cogs"), Decimal("0")),

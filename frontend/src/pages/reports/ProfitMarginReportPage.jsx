@@ -11,7 +11,7 @@ import Card from '../../components/ui/Card';
 import Table from '../../components/ui/Table';
 import Button from '../../components/ui/Button';
 import BackLink from '../../components/ui/BackLink';
-import FilterBar from '../../components/ui/FilterBar';
+import SalesManReportFilterBar from '../../components/reports/SalesManReportFilterBar';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import Pagination from '../../components/ui/Pagination';
 import InlineAlert from '../../components/ui/InlineAlert';
@@ -133,8 +133,8 @@ const ProfitMarginReportPage = () => {
                 </div>
 
                 {showFilters && (
-                    <FilterBar
-                        filters={filterConfig}
+                    <SalesManReportFilterBar
+                        dateFilters={filterConfig}
                         onApply={handleApplyFilters}
                         onReset={handleResetFilters}
                     />

@@ -38,6 +38,20 @@ class ReportDateFilterSerializer(serializers.Serializer):
 
 
 # ---------------------------------------------------------------------------
+# Sales-man scoping — used by only 4 reports (Invoices, Cash Collected,
+# Customer Returns, Profit/Margin). Deliberately separate from
+# ReportDateFilterSerializer, which 16+ other report views also share —
+# adding these fields there would mean every other selector's **kwargs call
+# starts receiving sales_man_id/sales_man_link_name_id it was never written
+# to accept.
+# ---------------------------------------------------------------------------
+
+class ReportSalesManFilterSerializer(serializers.Serializer):
+    sales_man_id           = serializers.IntegerField(required=False, allow_null=True)
+    sales_man_link_name_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+# ---------------------------------------------------------------------------
 # Invoices report — lightweight list item (not the full InvoiceReadSerializer)
 # ---------------------------------------------------------------------------
 

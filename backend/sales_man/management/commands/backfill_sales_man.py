@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 
 CODE_PATTERN = re.compile(r"^(?P<prefix>[^-]+)-(?P<link>FSD|OS)-(?P<suffix>.+)$", re.IGNORECASE)
@@ -14,6 +14,17 @@ SEED_SALES_MEN = [
 ]
 
 
+def _clean_suffix(raw_suffix: str) -> str:
+    """
+    The suffix segment is captured greedily (everything after prefix-link),
+    so real data with a stray hyphen inside it (e.g. 'CUS-OS-786-155',
+    originally meant as one code) comes through as '786-155'. Every hyphen
+    inside the suffix is stripped so the stored code_suffix and composed
+    code always read as one contiguous token, e.g. '786155'.
+    """
+    return raw_suffix.replace("-", "")
+
+
 class Command(BaseCommand):
     """
     One-off setup + data-fix command for the sales_man app.
@@ -21,15 +32,22 @@ class Command(BaseCommand):
     1. Creates SalesMan 'sale_man_1'/'sale_man_2' (idempotent, get_or_create
        by code) and their SalesManLinkName 'FSD'/'OS' (idempotent, by name).
     2. Scans every non-deleted Customer whose `code` matches
-       PREFIX-<FSD|OS>-suffix (case-insensitive). Only the PREFIX segment is
-       ever rewritten (to settings.CUSTOMER_PREFIX) — the link segment and
-       suffix are never touched, per the project's explicit instruction not
-       to change the code's meaning, only its prefix. Matching customers are
-       assigned to the corresponding sales man/link name.
+       PREFIX-<FSD|OS>-suffix (case-insensitive). The prefix is rewritten to
+       settings.CUSTOMER_PREFIX and any stray hyphen(s) inside the suffix are
+       stripped (see _clean_suffix) — the link segment and the suffix's own
+       characters are otherwise never touched. This re-normalizes on EVERY
+       run, not just customers whose prefix is currently wrong, so a
+       customer already sitting at 'ALFA-OS-786-155' from an earlier run
+       still gets cleaned up to 'ALFA-OS-786155' on a re-run. Matching
+       customers are assigned to the corresponding sales man/link name.
     3. Any customer whose code does NOT match the pattern is reported at the
        TOP of the output as malformed, needing manual attention, and is
        never touched.
-    4. Recomputes total_customers/total_outstanding for both sales men from
+    4. A fix that would collide with another customer's existing code (real
+       production data can have e.g. both 'ALF-FSD-786155' and
+       'ALFA-FSD-786155' as separate rows) is reported separately and
+       skipped, rather than crashing/rolling back the whole batch.
+    5. Recomputes total_customers/total_outstanding for both sales men from
        scratch (idempotent — safe to re-run any number of times).
 
     Default run WRITES. Pass --dry-run to only print the report without
@@ -85,45 +103,63 @@ class Command(BaseCommand):
         # Step 2: scan customers
         # ------------------------------------------------------------
         malformed = []
-        prefix_fixes = []
+        code_fixes = []       # (customer, current_code, target_code, clean_suffix)
+        code_collisions = []  # (customer, current_code, target_code)
         assignments = []
 
         customers = Customer.objects.filter(is_deleted=False).select_related(
             "sales_man_link_name",
         ).order_by("id")
+
+        # Every code currently in use — used to detect a fix that would
+        # collide with another customer's existing code (real production
+        # data has both 'ALF-FSD-123' and 'ALFA-FSD-123' as SEPARATE rows,
+        # e.g. an old typo'd prefix that was never cleaned up). Updated as
+        # we go so two fixes in THIS SAME batch that would land on the same
+        # target code are also caught, not just collisions against rows
+        # that were already correct.
+        codes_in_use = {c.code.upper() for c in customers}
+
         for customer in customers:
             match = CODE_PATTERN.match(customer.code)
             if not match:
                 malformed.append(customer)
                 continue
 
-            found_prefix = match.group("prefix")
             link_key = match.group("link").upper()
-            suffix = match.group("suffix")
+            clean_suffix = _clean_suffix(match.group("suffix"))
             link_name = link_name_objs.get(link_key)
 
-            if found_prefix != prefix:
-                prefix_fixes.append((customer, found_prefix, prefix))
+            target_code = f"{prefix}-{link_key}-{clean_suffix}".upper()
+            if target_code != customer.code.upper():
+                if target_code in codes_in_use:
+                    code_collisions.append((customer, customer.code, target_code))
+                else:
+                    code_fixes.append((customer, customer.code, target_code, clean_suffix))
+                    codes_in_use.discard(customer.code.upper())
+                    codes_in_use.add(target_code)
 
             current_link = customer.sales_man_link_name
             already_assigned = (
                 current_link is not None
                 and current_link.name.upper() == link_key
                 and customer.sales_man_id == link_name.sales_man_id
+                and customer.code_suffix == clean_suffix
             )
             if link_name and not already_assigned:
-                assignments.append((customer, link_name, suffix))
+                assignments.append((customer, link_name, clean_suffix))
 
         # ------------------------------------------------------------
         # Report: totals first, then malformed codes (fix these manually
         # before anything else), then what will actually change.
         # ------------------------------------------------------------
         total_customers = len(customers)  # queryset already fully evaluated by the loop above — no extra query
-        convertible = total_customers - len(malformed)
+        convertible = total_customers - len(malformed) - len(code_collisions)
         self.stdout.write(self.style.MIGRATE_HEADING(
             f"\n=== Summary: {total_customers} customer(s) scanned — "
             f"{convertible} match the expected code structure and can be "
-            f"converted with no error, {len(malformed)} do not ==="
+            f"converted with no error, {len(malformed)} malformed, "
+            f"{len(code_collisions)} blocked by a code collision ==="
         ))
 
         self.stdout.write(self.style.WARNING(
@@ -133,12 +169,23 @@ class Command(BaseCommand):
         for customer in malformed:
             self.stdout.write(f"  id={customer.id} code={customer.code!r} name={customer.name!r}")
 
-        self.stdout.write(f"\n=== {len(prefix_fixes)} customer(s) need their code prefix fixed to {prefix!r} ===")
-        for customer, old_prefix, new_prefix in prefix_fixes:
-            self.stdout.write(f"  id={customer.id} {customer.code!r} -> prefix {old_prefix!r} -> {new_prefix!r}")
+        self.stdout.write(self.style.WARNING(
+            f"\n=== {len(code_collisions)} customer(s) whose fixed code would "
+            f"COLLIDE with another customer's existing code — fix these manually "
+            f"first (likely a duplicate/typo'd record) ==="
+        ))
+        for customer, current_code, target_code in code_collisions:
+            self.stdout.write(
+                f"  id={customer.id} {current_code!r} -> would become {target_code!r}, "
+                f"but that code is already used by another customer"
+            )
+
+        self.stdout.write(f"\n=== {len(code_fixes)} customer(s) need their code fixed to match {prefix!r}-<link>-<suffix> ===")
+        for customer, current_code, target_code, _clean_suffix_value in code_fixes:
+            self.stdout.write(f"  id={customer.id} {current_code!r} -> {target_code!r}")
 
         self.stdout.write(f"\n=== {len(assignments)} customer(s) will be (re)assigned to a sales man ===")
-        for customer, link_name, suffix in assignments:
+        for customer, link_name, clean_suffix in assignments:
             self.stdout.write(
                 f"  id={customer.id} {customer.code!r} -> link={link_name.name} "
                 f"sales_man={link_name.sales_man.name}"
@@ -149,30 +196,41 @@ class Command(BaseCommand):
             return
 
         # ------------------------------------------------------------
-        # Step 3: apply prefix fixes + assignments
+        # Step 3: apply code fixes + assignments
         # ------------------------------------------------------------
+        skipped_code_fixes = []
         with transaction.atomic():
-            prefix_fixed_ids = set()
-            for customer, old_prefix, new_prefix in prefix_fixes:
-                match = CODE_PATTERN.match(customer.code)
-                customer.code = f"{new_prefix}-{match.group('link').upper()}-{match.group('suffix')}"
-                customer.save(update_fields=["code"])
-                prefix_fixed_ids.add(customer.id)
+            fixed_ids = set()
+            for customer, current_code, target_code, clean_suffix in code_fixes:
+                # The proactive collision check above already rules out the
+                # vast majority of cases — this savepoint is a defense-in-
+                # depth net so an edge case it missed (e.g. a race with
+                # another process writing concurrently) skips just this one
+                # row instead of rolling back every fix already applied in
+                # this run.
+                try:
+                    with transaction.atomic():
+                        customer.code = target_code
+                        customer.save(update_fields=["code"])
+                except IntegrityError:
+                    skipped_code_fixes.append((customer, target_code))
+                    continue
+                fixed_ids.add(customer.id)
 
-            for customer, link_name, suffix in assignments:
-                # Only needed for a customer that ALSO had its prefix fixed
+            for customer, link_name, clean_suffix in assignments:
+                # Only needed for a customer that ALSO had its code fixed
                 # above — its in-memory `code` was just overwritten there,
                 # so this avoids clobbering that with the stale pre-fix
-                # value. A customer with no prefix fix already has the
+                # value. A customer with no code fix already has the
                 # correct `code` in memory, no extra query needed.
-                if customer.id in prefix_fixed_ids:
+                if customer.id in fixed_ids:
                     customer.refresh_from_db(fields=["code"])
                 customer.sales_man_link_name = link_name
                 customer.sales_man = link_name.sales_man
-                customer.code_suffix = suffix
+                customer.code_suffix = clean_suffix
                 customer.save(update_fields=["sales_man_link_name", "sales_man", "code_suffix"])
 
-            # Step 4: idempotent full recompute of both stats fields.
+            # Step 5: idempotent full recompute of both stats fields.
             for seed in SEED_SALES_MEN:
                 sales_man = SalesMan.objects.get(code=seed["code"])
                 total_customers = Customer.objects.filter(
@@ -190,5 +248,13 @@ class Command(BaseCommand):
                     f"{sales_man.name}: total_customers={total_customers} "
                     f"total_outstanding={total_outstanding}"
                 ))
+
+        if skipped_code_fixes:
+            self.stdout.write(self.style.WARNING(
+                f"\n{len(skipped_code_fixes)} code fix(es) were skipped at write "
+                f"time due to an unexpected code collision — investigate manually:"
+            ))
+            for customer, target_code in skipped_code_fixes:
+                self.stdout.write(f"  id={customer.id} -> would become {target_code!r}")
 
         self.stdout.write(self.style.SUCCESS("\nDone."))

@@ -234,7 +234,8 @@ class BackfillCommandTests(TestCase):
         # 3 customers total: 2 match the pattern (convertible), 1 malformed.
         self.assertIn("Summary: 3 customer(s) scanned", output)
         self.assertIn("2 match the expected code structure", output)
-        self.assertIn("1 do not", output)
+        self.assertIn("1 malformed", output)
+        self.assertIn("0 blocked by a code collision", output)
 
     def test_apply_fixes_prefix_and_assigns_and_is_idempotent(self):
         call_command("backfill_sales_man")
@@ -296,3 +297,92 @@ class SalesManUpdateViewTests(TestCase):
         create_sales_man(name="sale_man_2", code="SM2", user=self.admin)
         response = self._patch({"code": "SM2"})
         self.assertEqual(response.status_code, 400)
+
+
+class BackfillCommandPrefixCollisionTests(TestCase):
+    """
+    Regression test for a real production-data shape: two DIFFERENT customer
+    rows share the same link+suffix segment but differ only by prefix (e.g.
+    a typo'd 'ALF-' vs the correct 'ALFA-'). Naively rewriting the wrong one
+    to the correct prefix collides with the customer that already has that
+    exact code — this must be caught and reported, not crash (and roll back)
+    the whole batch.
+    """
+
+    def setUp(self):
+        self.admin = make_admin()
+        self.already_correct = Customer.objects.create(
+            name="Already Correct", code="ALFA-FSD-7860310", address="x",
+            created_by=self.admin, updated_by=self.admin,
+        )
+        self.colliding = Customer.objects.create(
+            name="Typo Prefix", code="ALF-FSD-7860310", address="x",
+            created_by=self.admin, updated_by=self.admin,
+        )
+        # A normal, non-colliding fix must still go through in the SAME run.
+        self.normal_fix = Customer.objects.create(
+            name="Normal Fix", code="OLD-OS-999", address="x",
+            created_by=self.admin, updated_by=self.admin,
+        )
+
+    def test_apply_reports_collision_and_still_commits_the_rest(self):
+        import io
+        out = io.StringIO()
+        call_command("backfill_sales_man", stdout=out)
+        output = out.getvalue()
+
+        self.assertIn("1 customer(s) whose fixed code would COLLIDE", output)
+        self.assertIn("ALF-FSD-7860310", output)
+
+        self.colliding.refresh_from_db()
+        self.already_correct.refresh_from_db()
+        self.normal_fix.refresh_from_db()
+        # The colliding customer's code is untouched — no crash, no partial write.
+        self.assertEqual(self.colliding.code, "ALF-FSD-7860310")
+        self.assertEqual(self.already_correct.code, "ALFA-FSD-7860310")
+        # The unrelated fix in the SAME run still committed — proves one
+        # collision no longer rolls back the entire batch.
+        self.assertEqual(self.normal_fix.code, "ALFA-OS-999")
+
+        sm2 = SalesMan.objects.get(code="SM2")
+        self.assertEqual(sm2.total_customers, 1)  # normal_fix only
+
+
+class BackfillCommandSuffixHyphenTests(TestCase):
+    """
+    Real production data can have a stray hyphen inside the suffix segment
+    itself (e.g. 'CUS-OS-786-155', originally meant as one code) — the
+    regex's greedy suffix capture preserves it as '786-155'. Every hyphen
+    inside the suffix must be stripped, and this must apply even to a
+    customer whose prefix is ALREADY correct (re-normalizing on every run,
+    not just when the prefix needs fixing) and even to one already assigned
+    from an earlier, flawed run.
+    """
+
+    def setUp(self):
+        self.admin = make_admin()
+
+    def test_hyphen_in_suffix_is_stripped_even_with_correct_prefix(self):
+        customer = Customer.objects.create(
+            name="Hyphen Suffix", code="ALFA-OS-786-155", address="x",
+            created_by=self.admin, updated_by=self.admin,
+        )
+        call_command("backfill_sales_man")
+        customer.refresh_from_db()
+        self.assertEqual(customer.code, "ALFA-OS-786155")
+        self.assertEqual(customer.code_suffix, "786155")
+        sm2 = SalesMan.objects.get(code="SM2")
+        self.assertEqual(sm2.total_customers, 1)
+
+    def test_already_assigned_customer_with_stale_hyphenated_suffix_gets_corrected_on_rerun(self):
+        sm2 = create_sales_man(name="sale_man_2", code="SM2", user=self.admin)
+        link_os = create_link_name(sales_man_id=sm2.id, name="OS", user=self.admin)
+        customer = Customer.objects.create(
+            name="Stale Assignment", code="ALFA-OS-786-155", address="x",
+            sales_man_link_name=link_os, sales_man=sm2, code_suffix="786-155",
+            created_by=self.admin, updated_by=self.admin,
+        )
+        call_command("backfill_sales_man")
+        customer.refresh_from_db()
+        self.assertEqual(customer.code, "ALFA-OS-786155")
+        self.assertEqual(customer.code_suffix, "786155")

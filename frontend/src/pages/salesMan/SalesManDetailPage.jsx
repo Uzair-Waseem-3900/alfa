@@ -111,48 +111,42 @@ const SalesManDetailPage = () => {
         <div className="space-y-6">
             <BackLink to="/sales-man">Back to Sales Men</BackLink>
 
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex flex-col gap-4">
                 <div>
-                    <h1 className="text-3xl font-bold text-neutral-900">{salesMan.name}</h1>
+                    <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 break-words">{salesMan.name}</h1>
                     <p className="text-neutral-500 mt-1">Code: {salesMan.code}</p>
                 </div>
-                <Button variant="secondary" icon={Pencil} onClick={() => setShowEditModal(true)}>
-                    Edit Details
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                    <Button icon={Users} onClick={() => navigate(`/sales-man/${id}/customers`)}>
+                        View Customers
+                    </Button>
+                    <Button icon={Receipt} onClick={() => navigate(`/sales-man/${id}/invoices`)}>
+                        View Invoices
+                    </Button>
+                    <Button variant="secondary" icon={Pencil} onClick={() => setShowEditModal(true)}>
+                        Edit Details
+                    </Button>
+                </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Card
-                    className="p-5 flex items-center gap-4 cursor-pointer"
-                    hover
-                    onClick={() => navigate(`/sales-man/${id}/customers`)}
-                >
-                    <div className="w-12 h-12 rounded-xl bg-primary-50 flex items-center justify-center">
+                <Card className="p-5 flex items-center gap-4" hover={false}>
+                    <div className="w-12 h-12 flex-shrink-0 rounded-xl bg-primary-50 flex items-center justify-center">
                         <Users className="w-6 h-6 text-primary-600" />
                     </div>
-                    <div className="flex-1">
+                    <div className="min-w-0">
                         <p className="text-sm text-neutral-500">Total Customers</p>
                         <p className="text-2xl font-bold text-neutral-900">{salesMan.total_customers}</p>
                     </div>
-                    <Button variant="secondary" size="sm" icon={Users} onClick={(e) => { e.stopPropagation(); navigate(`/sales-man/${id}/customers`); }}>
-                        View Customers
-                    </Button>
                 </Card>
-                <Card
-                    className="p-5 flex items-center gap-4 cursor-pointer"
-                    hover
-                    onClick={() => navigate(`/sales-man/${id}/invoices`)}
-                >
-                    <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center">
+                <Card className="p-5 flex items-center gap-4" hover={false}>
+                    <div className="w-12 h-12 flex-shrink-0 rounded-xl bg-amber-50 flex items-center justify-center">
                         <Wallet className="w-6 h-6 text-amber-600" />
                     </div>
-                    <div className="flex-1">
+                    <div className="min-w-0">
                         <p className="text-sm text-neutral-500">Total Outstanding</p>
-                        <p className="text-2xl font-bold text-neutral-900">Rs. {fmt(salesMan.total_outstanding)}</p>
+                        <p className="text-2xl font-bold text-neutral-900 break-words">Rs. {fmt(salesMan.total_outstanding)}</p>
                     </div>
-                    <Button variant="secondary" size="sm" icon={Receipt} onClick={(e) => { e.stopPropagation(); navigate(`/sales-man/${id}/invoices`); }}>
-                        View Invoices
-                    </Button>
                 </Card>
             </div>
 
@@ -193,14 +187,14 @@ const SalesManDetailPage = () => {
                             </Badge>
                         ))}
                     </div>
-                    <form onSubmit={handleAddLinkName} className="flex gap-2 max-w-sm">
+                    <form onSubmit={handleAddLinkName} className="flex flex-col sm:flex-row gap-2 max-w-sm">
                         <Input
                             value={newLinkName}
                             onChange={(e) => setNewLinkName(e.target.value)}
                             placeholder="New link name, e.g. FSD"
                             className="flex-1"
                         />
-                        <Button type="submit" icon={Plus} loading={addingLinkName} disabled={!newLinkName.trim()}>
+                        <Button type="submit" icon={Plus} loading={addingLinkName} disabled={!newLinkName.trim()} className="sm:w-auto w-full">
                             Add
                         </Button>
                     </form>

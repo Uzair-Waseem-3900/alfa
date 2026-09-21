@@ -98,14 +98,14 @@ const SalesManInvoicesPage = () => {
             <BackLink to={`/sales-man/${id}`}>Back to Sales Man</BackLink>
 
             <div>
-                <h1 className="text-3xl font-bold text-neutral-900">
+                <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 break-words">
                     {salesMan ? `${salesMan.name}'s Invoices` : 'Invoices'}
                 </h1>
                 <p className="text-neutral-500 mt-1">All invoices billed to this sales man's customers</p>
             </div>
 
             <div className="space-y-4">
-                <div className="flex gap-4">
+                <div className="flex flex-wrap gap-4">
                     <SearchBar
                         onSearch={handleSearch}
                         placeholder="Search by bill number..."

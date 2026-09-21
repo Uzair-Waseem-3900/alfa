@@ -50,7 +50,7 @@ const SalesManCustomersPage = () => {
             <BackLink to={`/sales-man/${id}`}>Back to Sales Man</BackLink>
 
             <div>
-                <h1 className="text-3xl font-bold text-neutral-900">
+                <h1 className="text-2xl sm:text-3xl font-bold text-neutral-900 break-words">
                     {salesMan ? `${salesMan.name}'s Customers` : 'Customers'}
                 </h1>
                 <p className="text-neutral-500 mt-1">Every customer currently assigned to this sales man</p>

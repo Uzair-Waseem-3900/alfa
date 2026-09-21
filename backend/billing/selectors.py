@@ -19,6 +19,7 @@ from .models import (
 
 def get_all_customers(
     *, search: str = None, name: str = None, code: str = None, tier: str = None,
+    sales_man_id: int = None,
 ) -> QuerySet:
     # select_related: one JOIN each for credit_score (score/tier column) and
     # created_by/updated_by (CustomerReadSerializer's StringRelatedField
@@ -27,7 +28,7 @@ def get_all_customers(
     # each paying a full network round trip to the DB — measured ~5s of a
     # ~5.4s page load before this fix).
     qs = Customer.objects.filter(is_deleted=False).select_related(
-        "credit_score", "created_by", "updated_by",
+        "credit_score", "created_by", "updated_by", "sales_man", "sales_man_link_name",
     )
     if search:
         qs = qs.filter(search_q(search, "name", "code", "mobile"))
@@ -38,11 +39,22 @@ def get_all_customers(
     if tier:
         # credit_score__tier — indexed column on CustomerCreditScore, one JOIN.
         qs = qs.filter(credit_score__tier=tier)
+    if sales_man_id:
+        qs = qs.filter(sales_man_id=sales_man_id)
     return qs
 
 
 def get_customer_by_id(pk: int) -> Customer:
-    return get_object_or_404(Customer, pk=pk, is_deleted=False)
+    # select_related mirrors get_all_customers — this feeds the same
+    # CustomerReadSerializer (credit_score, sales_man, sales_man_link_name)
+    # from CustomerRetrieveUpdateDestroyView; without it, a single-row
+    # request pays 3+ extra queries it doesn't need to.
+    return get_object_or_404(
+        Customer.objects.select_related(
+            "credit_score", "created_by", "updated_by", "sales_man", "sales_man_link_name",
+        ),
+        pk=pk, is_deleted=False,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +73,7 @@ def _invoice_qs():
     # payments, and item category/shelf.
     return Invoice.objects.select_related(
         "customer", "customer__created_by", "customer__updated_by", "customer__credit_score",
+        "customer__sales_man", "customer__sales_man_link_name",
         "created_by", "updated_by", "confirmed_by", "deleted_by",
     ).prefetch_related(
         Prefetch(
@@ -447,13 +460,19 @@ def get_filtered_invoices(
     min_amount     : str  = None,
     max_amount     : str  = None,
     due_only       : bool = False,
+    outstanding_only: bool = False,
+    sales_man_id   : int  = None,
 ) -> "QuerySet":
     """
     Master invoice filter selector — all list views use this, including the
     Due Invoices tab (due_only=True): confirmed, still-outstanding invoices
     whose payment_due_date has passed. payment_due_date is a plain DateField
     (not a DateTimeField), so a direct __lte comparison is index-safe —
-    no __date cast needed.
+    no __date cast needed. outstanding_only=True mirrors
+    get_all_outstanding_invoices' filter (credit_outstanding__gt=0, non-draft)
+    without the due-date condition — lets a caller (e.g. the sales-man
+    invoices page) reuse this one selector for an "Outstanding" tab instead
+    of a separate view/selector.
     Every parameter is optional; combining them narrows results.
     _clean() ensures empty strings from query params don't slip through.
     """
@@ -468,11 +487,16 @@ def get_filtered_invoices(
             credit_outstanding__gt=0,
             payment_due_date__lte=timezone.localtime(timezone.now()).date(),
         )
+    elif outstanding_only:
+        qs = qs.exclude(status=Invoice.Status.DRAFT).filter(credit_outstanding__gt=0)
 
     if _clean(status):
         qs = qs.filter(status=_clean(status))
     if _clean(customer_id):
         qs = qs.filter(customer_id=_clean(customer_id))
+    if _clean(sales_man_id):
+        # customer__sales_man_id — indexed FK, one JOIN.
+        qs = qs.filter(customer__sales_man_id=_clean(sales_man_id))
     if _clean(customer_name):
         qs = qs.filter(search_q(_clean(customer_name), "customer__name"))
     if _clean(customer_code):

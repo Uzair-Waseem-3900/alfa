@@ -1,6 +1,6 @@
 from datetime import timedelta
 from decimal import Decimal
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Sum
 from django.utils import timezone
 
@@ -15,6 +15,7 @@ from .models import (
 from .selectors import (
     get_available_purchase_batches,
     get_customer_by_id,
+    get_customer_outstanding,
     get_invoice_by_id,
     get_invoice_item_by_id,
     get_payment_by_id,
@@ -63,6 +64,8 @@ def _sync_invoice_payment_summary(invoice) -> None:
     from django.db.models import Q, Sum
     from .models import Payment
 
+    old_credit_outstanding = invoice.credit_outstanding
+
     # One conditional aggregate instead of loading every payment row into
     # Python and looping twice — same numbers, one query.
     agg = Payment.objects.filter(invoice=invoice, is_deleted=False).aggregate(
@@ -103,6 +106,10 @@ def _sync_invoice_payment_summary(invoice) -> None:
         "cash_received", "credit_outstanding", "total_paid",
         "remaining_amount", "payment_status",
     ])
+
+    _adjust_sales_man_outstanding_for_customer(
+        invoice.customer, credit_outstanding - old_credit_outstanding,
+    )
 
 
 # Reference generation is counter-based (purchases.DocumentCounter): O(1),
@@ -366,15 +373,88 @@ def _recalculate_invoice_totals(invoice: Invoice) -> None:
 # Customer services
 # ---------------------------------------------------------------------------
 
-@transaction.atomic
-def create_customer(*, name: str, code: str, address: str, mobile: str = "", user) -> Customer:
-    from rest_framework.exceptions import ValidationError
-    if Customer.objects.filter(code__iexact=code, is_deleted=False).exists():
-        raise ValidationError({"code": "A customer with this code already exists."})
-    customer = Customer.objects.create(
-        name=name, code=code.upper(), address=address,
-        mobile=mobile, created_by=user, updated_by=user,
+def _compose_customer_code(*, link_name, code_suffix: str) -> str:
+    from django.conf import settings
+    return f"{settings.CUSTOMER_PREFIX}-{link_name.name}-{code_suffix}".upper()
+
+
+def _adjust_sales_man_outstanding_for_customer(customer, delta) -> None:
+    """
+    Nudges the assigned sales man's O(1) total_outstanding counter by delta
+    (positive or negative). No-op when the customer has no sales_man.
+    Called from every path that changes an Invoice's credit_outstanding
+    (confirm, payment create/delete, return acceptance, opening balance) —
+    see sales_man/services.py's _adjust_sales_man_stats docstring.
+
+    Locks the Customer row (select_for_update) before re-checking
+    sales_man_id — this serializes against update_customer's/
+    delete_customer's own select_for_update on the same row when they
+    "transfer" a customer's whole outstanding balance between sales men
+    (they read a live Sum() as an absolute snapshot rather than a delta, so
+    without a shared lock a concurrent payment landing here mid-transfer
+    would apply its delta to the pre-transfer sales man, and the transfer
+    would then move the STALE snapshot amount — permanently drifting both
+    sales men's totals by the concurrent delta).
+    """
+    if not delta:
+        return
+    locked_sales_man_id = (
+        Customer.objects.select_for_update()
+        .values_list("sales_man_id", flat=True)
+        .get(pk=customer.pk)
     )
+    if not locked_sales_man_id:
+        return
+    from sales_man.services import _adjust_sales_man_stats
+    _adjust_sales_man_stats(sales_man_id=locked_sales_man_id, outstanding_delta=delta)
+
+
+@transaction.atomic
+def create_customer(
+    *, name: str, code: str = None, sales_man_link_name_id: int = None,
+    code_suffix: str = None, address: str, mobile: str = "", user,
+) -> Customer:
+    """
+    Two ways to supply the code:
+      - sales_man_link_name_id + code_suffix (the CustomerWriteSerializer/UI
+        path — always required there): code is composed as
+        PREFIX-LINKNAME-suffix and the customer is assigned to that link
+        name's sales man.
+      - code alone (legacy/internal path — used by callers that predate the
+        sales_man app and have no sales-man concept, e.g. other apps' test
+        fixtures, data-entry bootstrap): stored as-is, no sales_man
+        assignment. Kept for backward compatibility rather than forcing
+        every unrelated caller to set up a sales man link name.
+    """
+    from rest_framework.exceptions import ValidationError
+
+    link_name = None
+    if sales_man_link_name_id:
+        from sales_man.selectors import get_link_name_by_id
+        link_name = get_link_name_by_id(sales_man_link_name_id)
+        if not code_suffix:
+            raise ValidationError({"code_suffix": "This field is required."})
+        code = _compose_customer_code(link_name=link_name, code_suffix=code_suffix)
+    elif not code:
+        raise ValidationError({"code": "Either code_suffix (with sales_man_link_name_id) or code is required."})
+
+    duplicate_error = ValidationError({"code": "A customer with this code already exists."})
+    if Customer.objects.filter(code__iexact=code, is_deleted=False).exists():
+        raise duplicate_error
+    try:
+        with transaction.atomic():
+            customer = Customer.objects.create(
+                name=name, code=code.upper(), code_suffix=code_suffix or "", address=address,
+                mobile=mobile,
+                sales_man_link_name=link_name, sales_man=link_name.sales_man if link_name else None,
+                created_by=user, updated_by=user,
+            )
+    except IntegrityError:
+        raise duplicate_error
+
+    if link_name:
+        from sales_man.services import _adjust_sales_man_stats
+        _adjust_sales_man_stats(sales_man_id=link_name.sales_man_id, customer_delta=1)
 
     from credit_score.services import initialize_credit_score
     initialize_credit_score(customer, user)
@@ -388,16 +468,70 @@ def create_customer(*, name: str, code: str, address: str, mobile: str = "", use
 
 @transaction.atomic
 def update_customer(
-    *, pk: int, name: str = None, code: str = None,
-    address: str = None, mobile: str = None, user,
+    *, pk: int, name: str = None, code: str = None, sales_man_link_name_id: int = None,
+    code_suffix: str = None, address: str = None, mobile: str = None, user,
 ) -> Customer:
+    """
+    Three ways to change the code (mutually exclusive per call):
+      - sales_man_link_name_id: reassigns the link name (and transitively
+        the sales man, since a link name's owner never changes) — `code` is
+        regenerated as PREFIX-newLink-suffix, and both the old and new sales
+        man's total_customers/total_outstanding are adjusted in the same
+        transaction.
+      - code_suffix alone (no link change): rewrites just the suffix
+        segment of `code`, keeping the current link name.
+      - code: legacy/internal direct override of the whole code string, no
+        sales_man involvement at all — kept for callers that predate the
+        sales_man app (see create_customer's docstring for the same
+        rationale). Ignored if sales_man_link_name_id or code_suffix is
+        also passed.
+    """
     from rest_framework.exceptions import ValidationError
+    from sales_man.selectors import get_link_name_by_id
+    from sales_man.services import _adjust_sales_man_stats
+
     customer = get_customer_by_id(pk)
-    if code:
+    new_link_name = None
+    if sales_man_link_name_id and sales_man_link_name_id != customer.sales_man_link_name_id:
+        new_link_name = get_link_name_by_id(sales_man_link_name_id)
+
+    new_suffix = code_suffix if code_suffix is not None else customer.code_suffix
+    effective_link_name = new_link_name or customer.sales_man_link_name
+
+    if new_link_name or code_suffix is not None:
+        if not effective_link_name:
+            raise ValidationError({"sales_man_link_name": "This customer has no sales man link name assigned yet."})
+        new_code = _compose_customer_code(link_name=effective_link_name, code_suffix=new_suffix)
+        qs = Customer.objects.filter(code__iexact=new_code, is_deleted=False).exclude(pk=pk)
+        if qs.exists():
+            raise ValidationError({"code": "A customer with this code already exists."})
+        customer.code = new_code
+        customer.code_suffix = new_suffix
+    elif code:
         qs = Customer.objects.filter(code__iexact=code, is_deleted=False).exclude(pk=pk)
         if qs.exists():
             raise ValidationError({"code": "A customer with this code already exists."})
         customer.code = code.upper()
+
+    if new_link_name:
+        # Locks this Customer row for the rest of the transaction — see
+        # _adjust_sales_man_outstanding_for_customer's docstring: this is
+        # the other half of the race it guards against. Held until this
+        # function's own @transaction.atomic commits.
+        Customer.objects.select_for_update().get(pk=pk)
+        old_sales_man_id = customer.sales_man_id
+        # Outstanding follows the customer to the new sales man.
+        outstanding = get_customer_outstanding(pk)["total_credit_outstanding"]
+        if old_sales_man_id:
+            _adjust_sales_man_stats(
+                sales_man_id=old_sales_man_id, customer_delta=-1, outstanding_delta=-outstanding,
+            )
+        _adjust_sales_man_stats(
+            sales_man_id=new_link_name.sales_man_id, customer_delta=1, outstanding_delta=outstanding,
+        )
+        customer.sales_man_link_name = new_link_name
+        customer.sales_man = new_link_name.sales_man
+
     if name is not None:
         customer.name = name
     if address is not None:
@@ -405,7 +539,14 @@ def update_customer(
     if mobile is not None:
         customer.mobile = mobile
     customer.updated_by = user
-    customer.save(update_fields=["name", "code", "address", "mobile", "updated_by", "updated_at"])
+    try:
+        with transaction.atomic():
+            customer.save(update_fields=[
+                "name", "code", "code_suffix", "address", "mobile",
+                "sales_man_link_name", "sales_man", "updated_by", "updated_at",
+            ])
+    except IntegrityError:
+        raise ValidationError({"code": "A customer with this code already exists."})
 
     # Keep the ledger's name/code snapshot in sync with the live customer —
     # mirrors purchases.services.update_supplier's fix (same bug, found
@@ -416,8 +557,19 @@ def update_customer(
     return customer
 
 
+@transaction.atomic
 def delete_customer(*, pk: int, user) -> None:
     customer = get_customer_by_id(pk)
+    if customer.sales_man_id:
+        # See _adjust_sales_man_outstanding_for_customer's docstring — locks
+        # this row against a concurrent payment/return deciding its own
+        # delta for the same customer mid-delete.
+        Customer.objects.select_for_update().get(pk=pk)
+        outstanding = get_customer_outstanding(pk)["total_credit_outstanding"]
+        from sales_man.services import _adjust_sales_man_stats
+        _adjust_sales_man_stats(
+            sales_man_id=customer.sales_man_id, customer_delta=-1, outstanding_delta=-outstanding,
+        )
     _soft_delete(customer, user)
 
 
@@ -1071,6 +1223,7 @@ def confirm_invoice(*, invoice_id: int, user) -> Invoice:
             else:
                 reverse_allocations(advance_payment)
 
+    old_credit_outstanding = invoice.credit_outstanding  # 0 on every draft
     credit_outstanding = max(Decimal("0"), invoice.grand_total - advance)
     invoice.cash_received      = advance
     invoice.total_paid         = advance
@@ -1085,6 +1238,9 @@ def confirm_invoice(*, invoice_id: int, user) -> Invoice:
         "cash_received", "total_paid", "credit_outstanding",
         "remaining_amount", "payment_status",
     ])
+    _adjust_sales_man_outstanding_for_customer(
+        invoice.customer, credit_outstanding - old_credit_outstanding,
+    )
 
     # Sync CashFlow: customer owes (grand_total - advance); advance already in cash
     from cash_flow.services import sync_invoice_confirmed
@@ -1154,6 +1310,7 @@ def create_opening_balance_invoice(*, customer, amount: Decimal, user) -> Invoic
         created_by         = user,
         updated_by         = user,
     )
+    _adjust_sales_man_outstanding_for_customer(customer, amount)
 
     from credit_score.services import recalculate_credit_score
     recalculate_credit_score(

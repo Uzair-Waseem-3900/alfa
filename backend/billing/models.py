@@ -49,8 +49,25 @@ class AuditMixin(models.Model):
 class Customer(AuditMixin):
     name = models.CharField(max_length=255)
     code = models.CharField(max_length=100, unique=True)
+    # Raw user-entered suffix segment of `code` (PREFIX-LINKNAME-suffix).
+    # Stored explicitly so a later sales-man-link reassignment can rebuild
+    # `code` with the new link segment without fragile re-parsing of the
+    # existing code string (a suffix may itself contain hyphens).
+    code_suffix = models.CharField(max_length=100, blank=True, default="")
     address = models.TextField()
     mobile = models.CharField(max_length=20, blank=True, default="")
+    sales_man_link_name = models.ForeignKey(
+        "sales_man.SalesManLinkName", null=True, blank=True,
+        on_delete=models.PROTECT, related_name="customers", db_index=True,
+    )
+    # Denormalized from sales_man_link_name.sales_man — a link name's owning
+    # sales man never changes after creation (sales_man/models.py), so this
+    # never drifts. Avoids a join on every sales-man-scoped invoice/outstanding
+    # query (architecture.md's O(1)/avoid-extra-joins guidance).
+    sales_man = models.ForeignKey(
+        "sales_man.SalesMan", null=True, blank=True,
+        on_delete=models.PROTECT, related_name="customers", db_index=True,
+    )
 
     class Meta:
         verbose_name = "Customer"

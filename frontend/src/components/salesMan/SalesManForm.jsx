@@ -3,42 +3,30 @@ import { motion } from 'framer-motion';
 import PropTypes from 'prop-types';
 import { User, Hash, MapPin, Phone } from 'lucide-react';
 import Input from '../ui/Input';
-import Select from '../ui/Select';
 import Button from '../ui/Button';
 import { useToast } from '../../context/ToastContext';
 import { extractErrorMessage } from '../../utils/errorMessage';
-import { useSalesManLinkNameOptions } from '../../hooks/useSalesMan';
 
 // Fields the backend can attach a validation error to (see
-// billing/serializers.py CustomerWriteSerializer and
-// billing/services.py create_customer/update_customer). Any error key
-// outside this set (e.g. "detail" from an unexpected failure) falls back
-// to a toast instead of being silently dropped.
-const KNOWN_FIELDS = ['name', 'sales_man_link_name_id', 'code_suffix', 'code', 'address', 'mobile'];
+// sales_man/serializers.py SalesManWriteSerializer and
+// sales_man/services.py create_sales_man/update_sales_man).
+const KNOWN_FIELDS = ['name', 'code', 'address', 'phone'];
 
-const CustomerForm = ({ initialData, onSubmit, onCancel, loading }) => {
+const SalesManForm = ({ initialData, onSubmit, onCancel, loading }) => {
     const { toast } = useToast();
-    const { linkNames } = useSalesManLinkNameOptions();
-    const [formData, setFormData] = useState({
-        name: '',
-        sales_man_link_name_id: '',
-        code_suffix: '',
-        address: '',
-        mobile: '',
-    });
+    const [formData, setFormData] = useState({ name: '', code: '', address: '', phone: '' });
     const [errors, setErrors] = useState({});
 
     useEffect(() => {
         if (initialData) {
             setFormData({
                 name: initialData.name || '',
-                sales_man_link_name_id: initialData.sales_man_link_name_id || '',
-                code_suffix: initialData.code_suffix || '',
+                code: initialData.code || '',
                 address: initialData.address || '',
-                mobile: initialData.mobile || '',
+                phone: initialData.phone || '',
             });
         } else {
-            setFormData({ name: '', sales_man_link_name_id: '', code_suffix: '', address: '', mobile: '' });
+            setFormData({ name: '', code: '', address: '', phone: '' });
         }
         setErrors({});
     }, [initialData]);
@@ -54,9 +42,7 @@ const CustomerForm = ({ initialData, onSubmit, onCancel, loading }) => {
     const validate = () => {
         const newErrors = {};
         if (!formData.name.trim()) newErrors.name = 'Name is required';
-        if (!formData.sales_man_link_name_id) newErrors.sales_man_link_name_id = 'Sales man link name is required';
-        if (!formData.code_suffix.trim()) newErrors.code_suffix = 'Code is required';
-        if (!formData.address.trim()) newErrors.address = 'Address is required';
+        if (!formData.code.trim()) newErrors.code = 'Code is required';
         setErrors(newErrors);
         return Object.keys(newErrors).length === 0;
     };
@@ -80,7 +66,7 @@ const CustomerForm = ({ initialData, onSubmit, onCancel, loading }) => {
             if (Object.keys(fieldErrors).length > 0) {
                 setErrors(fieldErrors);
             } else {
-                toast.error(extractErrorMessage(error, 'Failed to save customer.'));
+                toast.error(extractErrorMessage(error, 'Failed to save sales man.'));
             }
         }
     };
@@ -100,39 +86,20 @@ const CustomerForm = ({ initialData, onSubmit, onCancel, loading }) => {
                     icon={User}
                     value={formData.name}
                     onChange={handleChange}
-                    placeholder="Enter customer name"
+                    placeholder="Enter sales man name"
                     error={errors.name}
                     required
                 />
-                <Select
-                    label="Sales Man Link Name"
-                    name="sales_man_link_name_id"
-                    value={formData.sales_man_link_name_id}
-                    onChange={handleChange}
-                    options={linkNames.map((ln) => ({ value: ln.id, label: `${ln.name} (${ln.sales_man_name})` }))}
-                    placeholder="Select link name..."
-                    error={errors.sales_man_link_name_id}
-                    required
-                />
-            </div>
-            <div>
                 <Input
                     label="Code"
-                    name="code_suffix"
+                    name="code"
                     icon={Hash}
-                    value={formData.code_suffix}
+                    value={formData.code}
                     onChange={handleChange}
-                    placeholder="Enter customer code"
-                    error={errors.code_suffix}
+                    placeholder="Enter unique employee code"
+                    error={errors.code}
                     required
                 />
-                {formData.sales_man_link_name_id && formData.code_suffix && (
-                    <p className="mt-1.5 text-sm text-neutral-500">
-                        Full code: <span className="font-medium text-neutral-700">
-                            {(linkNames.find((ln) => String(ln.id) === String(formData.sales_man_link_name_id))?.name || '')}-{formData.code_suffix.toUpperCase()}
-                        </span>
-                    </p>
-                )}
             </div>
             <Input
                 label="Address"
@@ -140,36 +107,35 @@ const CustomerForm = ({ initialData, onSubmit, onCancel, loading }) => {
                 icon={MapPin}
                 value={formData.address}
                 onChange={handleChange}
-                placeholder="Enter address"
+                placeholder="Enter address (optional)"
                 error={errors.address}
-                required
             />
             <Input
-                label="Mobile"
-                name="mobile"
+                label="Phone"
+                name="phone"
                 icon={Phone}
-                value={formData.mobile}
+                value={formData.phone}
                 onChange={handleChange}
-                placeholder="Enter mobile number (optional)"
-                error={errors.mobile}
+                placeholder="Enter phone number (optional)"
+                error={errors.phone}
             />
             <div className="flex justify-end gap-3 pt-4">
                 <Button type="button" variant="secondary" onClick={onCancel} disabled={loading} className="min-w-[100px]">
                     Cancel
                 </Button>
                 <Button type="submit" loading={loading} className="min-w-[160px]">
-                    {initialData ? 'Update Customer' : 'Create Customer'}
+                    {initialData ? 'Update Sales Man' : 'Create Sales Man'}
                 </Button>
             </div>
         </motion.form>
     );
 };
 
-CustomerForm.propTypes = {
+SalesManForm.propTypes = {
     initialData: PropTypes.object,
     onSubmit: PropTypes.func.isRequired,
     onCancel: PropTypes.func.isRequired,
     loading: PropTypes.bool,
 };
 
-export default CustomerForm;
+export default SalesManForm;

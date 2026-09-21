@@ -165,15 +165,19 @@ class CustomerReadSerializer(serializers.ModelSerializer):
     updated_by = serializers.StringRelatedField(read_only=True)
     credit_score = serializers.SerializerMethodField()
     credit_tier = serializers.SerializerMethodField()
+    sales_man_name = serializers.CharField(source="sales_man.name", read_only=True, default=None)
+    sales_man_link_name_id = serializers.IntegerField(source="sales_man_link_name.id", read_only=True, default=None)
+    sales_man_link_name = serializers.CharField(source="sales_man_link_name.name", read_only=True, default=None)
 
     class Meta:
         model = Customer
         fields = [
-            "id", "name", "code", "address", "mobile",
+            "id", "name", "code", "code_suffix", "address", "mobile",
             "credit_score", "credit_tier",
+            "sales_man", "sales_man_name", "sales_man_link_name_id", "sales_man_link_name",
             "created_by", "updated_by", "created_at", "updated_at",
         ]
-        read_only_fields = ["id", "created_by", "updated_by", "created_at", "updated_at"]
+        read_only_fields = ["id", "code", "created_by", "updated_by", "created_at", "updated_at"]
 
     def get_credit_score(self, obj):
         # obj.credit_score is the OneToOne reverse accessor (credit_score
@@ -189,9 +193,15 @@ class CustomerReadSerializer(serializers.ModelSerializer):
 
 
 class CustomerWriteSerializer(serializers.ModelSerializer):
+    # required=True by default — CustomerRetrieveUpdateDestroyView.update()
+    # calls this serializer with partial=True, which relaxes both to
+    # optional for PATCH while still requiring them on POST create.
+    sales_man_link_name_id = serializers.IntegerField()
+    code_suffix = serializers.CharField(allow_blank=False)
+
     class Meta:
         model = Customer
-        fields = ["name", "code", "address", "mobile"]
+        fields = ["name", "sales_man_link_name_id", "code_suffix", "address", "mobile"]
 
     def validate_name(self, value):
         if not value.strip():

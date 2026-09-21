@@ -28,9 +28,9 @@ class SoftDeleteAdminMixin:
 
 @admin.register(Customer)
 class CustomerAdmin(AuditAdminMixin, SoftDeleteAdminMixin, admin.ModelAdmin):
-    list_display = ["name", "code", "mobile", "is_deleted", "created_at"]
+    list_display = ["name", "code", "mobile", "sales_man", "sales_man_link_name", "is_deleted", "created_at"]
     search_fields = ["name", "code", "mobile"]
-    list_filter = ["is_deleted"]
+    list_filter = ["is_deleted", "sales_man"]
     readonly_fields = AuditAdminMixin.readonly_fields
 
 

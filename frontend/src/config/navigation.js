@@ -186,6 +186,8 @@ export const navGroups = [
 
 // Standalone links — not grouped, rendered after navGroups (in this order)
 export const standaloneLinks = [
+    // Sales Man app has just one page — a flat link, not a dropdown group.
+    { name: 'Sales Men', path: '/sales-man', icon: Handshake, adminOnly: true },
     // Listing all users is superuser-only (see users app permission matrix)
     { name: 'Users', path: '/users', icon: Users, superuserOnly: true },
     { name: 'Backups', path: '/backups', icon: Archive, adminOnly: true },

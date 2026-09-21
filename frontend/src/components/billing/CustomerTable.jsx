@@ -17,6 +17,11 @@ const CustomerTable = ({ customers, onRowClick, onEdit, onDelete, isAdmin }) => 
         { key: 'address', label: 'Address' },
         { key: 'mobile', label: 'Mobile', render: (value) => value || 'N/A' },
         {
+            key: 'sales_man_name',
+            label: 'Sales Man',
+            render: (value) => value || <span className="text-neutral-400">Unassigned</span>,
+        },
+        {
             key: 'credit_score',
             label: 'Credit Score',
             width: '140px',

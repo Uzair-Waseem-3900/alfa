@@ -86,7 +86,7 @@ class CustomerListCreateView(generics.ListCreateAPIView):
         p = self.request.query_params
         return get_all_customers(
             search=p.get("search"), name=p.get("name"), code=p.get("code"),
-            tier=p.get("tier"),
+            tier=p.get("tier"), sales_man_id=p.get("sales_man_id"),
         )
 
     def create(self, request, *args, **kwargs):
@@ -94,7 +94,8 @@ class CustomerListCreateView(generics.ListCreateAPIView):
         serializer.is_valid(raise_exception=True)
         d = serializer.validated_data
         customer = create_customer(
-            name=d["name"], code=d["code"],
+            name=d["name"], sales_man_link_name_id=d["sales_man_link_name_id"],
+            code_suffix=d["code_suffix"],
             address=d["address"], mobile=d.get("mobile", ""),
             user=request.user,
         )

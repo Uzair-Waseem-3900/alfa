@@ -129,6 +129,12 @@ import AssetDisposalsPage from './pages/assets/AssetDisposalsPage';
 import AssetPaymentsPage from './pages/assets/AssetPaymentsPage';
 import AssetPaymentDetailPage from './pages/assets/AssetPaymentDetailPage';
 
+// Sales Man pages
+import SalesMenPage from './pages/salesMan/SalesMenPage';
+import SalesManDetailPage from './pages/salesMan/SalesManDetailPage';
+import SalesManCustomersPage from './pages/salesMan/SalesManCustomersPage';
+import SalesManInvoicesPage from './pages/salesMan/SalesManInvoicesPage';
+
 // Payment Methods pages
 import PaymentMethodsListPage from './pages/paymentMethods/PaymentMethodsListPage';
 import PaymentMethodDetailPage from './pages/paymentMethods/PaymentMethodDetailPage';
@@ -916,6 +922,39 @@ const AppContent = () => {
           <ProtectedRoute>
             <Layout>
               <AssetPaymentDetailPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        {/* Sales Man Routes */}
+        <Route path="/sales-man" element={
+          <ProtectedRoute>
+            <Layout>
+              <SalesMenPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/sales-man/:id" element={
+          <ProtectedRoute>
+            <Layout>
+              <SalesManDetailPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/sales-man/:id/customers" element={
+          <ProtectedRoute>
+            <Layout>
+              <SalesManCustomersPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/sales-man/:id/invoices" element={
+          <ProtectedRoute>
+            <Layout>
+              <SalesManInvoicesPage />
             </Layout>
           </ProtectedRoute>
         } />

@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { Wallet, Trash2 } from 'lucide-react';
 import Button from '../ui/Button';
 import EmptyState from '../ui/EmptyState';
+import { isReturnPayment } from '../../utils/helpers';
+
 
 const PaymentHistoryList = ({ payments, onDelete, isAdmin = false }) => {
     if (!payments || payments.length === 0) {
@@ -58,7 +60,7 @@ const PaymentHistoryList = ({ payments, onDelete, isAdmin = false }) => {
                                 {payment.created_by || 'System'}
                             </p>
                         </div>
-                        {isAdmin && onDelete && (
+                        {isAdmin && onDelete && !isReturnPayment(payment) && (
                             <Button
                                 size="sm"
                                 variant="danger"

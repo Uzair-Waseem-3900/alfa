@@ -17,6 +17,8 @@ import InlineAlert from '../../components/ui/InlineAlert';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { useToast } from '../../context/ToastContext';
 import { extractErrorMessage } from '../../utils/errorMessage';
+import { isReturnPayment } from '../../utils/helpers';
+
 
 const METHOD_META = {
     cash: { icon: Banknote, label: 'Cash', classes: 'bg-success-50 text-success-700' },
@@ -186,7 +188,7 @@ const PaymentDetailPage = () => {
                         </div>
                     </div>
                 </div>
-                {isAdmin && (
+                {isAdmin && !isReturnPayment(payment) && (
                     <Button
                         variant="danger"
                         onClick={() => setConfirmOpen(true)}

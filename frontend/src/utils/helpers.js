@@ -45,3 +45,12 @@ export const creditScoreColorClass = (tier) => {
     if (tier === 'poor') return 'text-error-600';
     return 'text-neutral-500';
 };
+
+// Returns true if a payment was auto-created against a return (credit note payment)
+export const isReturnPayment = (payment) => {
+    if (!payment) return false;
+    const amount = typeof payment.amount === 'string' ? parseFloat(payment.amount) : Number(payment.amount || 0);
+    const note = (payment.note || '').toLowerCase();
+    return amount < 0 || note.includes('credit note for return') || note.includes('auto credit note');
+};
+

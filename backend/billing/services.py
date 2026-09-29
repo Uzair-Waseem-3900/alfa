@@ -22,6 +22,12 @@ from .selectors import (
     get_return_by_id,
     get_return_item_by_id,
 )
+from .utils import calculate_return_line_total
+
+# Note prefix on the system-generated negative credit-note Payment that
+# accept_return creates (no dedicated field links it to its Return). Used by
+# accept_return and backfill_return_valuation so they can never drift apart.
+RETURN_CREDIT_NOTE_PREFIX = "Auto credit note for Return "
 
 # Single source of truth for identifying the system-generated advance
 # Payment row (no dedicated is_advance field — see purchases.services'
@@ -1461,7 +1467,7 @@ def create_return(*, invoice_id: int, items: list[dict], note: str = "", user) -
             })
 
         qty           = item_data["quantity"]
-        selling_price = invoice_item.selling_price
+        selling_price = invoice_item.effective_price
         cogs_per_unit = invoice_item.cogs_per_unit
         ReturnItem.objects.create(
             return_record=return_record,
@@ -1469,7 +1475,7 @@ def create_return(*, invoice_id: int, items: list[dict], note: str = "", user) -
             quantity=qty,
             selling_price=selling_price,
             cogs_per_unit=cogs_per_unit,
-            line_total=selling_price * qty,
+            line_total=calculate_return_line_total(effective_price=selling_price, quantity=qty),
             line_cogs=cogs_per_unit * qty,
         )
 
@@ -1514,7 +1520,7 @@ def update_return_items(*, return_id: int, items: list[dict], note: str = None, 
             })
 
         qty           = item_data["quantity"]
-        selling_price = invoice_item.selling_price
+        selling_price = invoice_item.effective_price
         cogs_per_unit = invoice_item.cogs_per_unit
         ReturnItem.objects.create(
             return_record=return_record,
@@ -1522,7 +1528,7 @@ def update_return_items(*, return_id: int, items: list[dict], note: str = None, 
             quantity=qty,
             selling_price=selling_price,
             cogs_per_unit=cogs_per_unit,
-            line_total=selling_price * qty,
+            line_total=calculate_return_line_total(effective_price=selling_price, quantity=qty),
             line_cogs=cogs_per_unit * qty,
         )
 
@@ -1593,10 +1599,11 @@ def accept_return(*, return_id: int, user) -> Return:
         invoice_item  = return_item.invoice_item
         qty           = return_item.quantity
 
-        # Snapshot from original invoice item
-        selling_price = invoice_item.selling_price
+        # Snapshot from original invoice item — the price actually billed
+        # (after discount/surcharge), not the list selling_price
+        selling_price = invoice_item.effective_price
         cogs_per_unit = invoice_item.cogs_per_unit
-        line_total    = selling_price * qty
+        line_total    = calculate_return_line_total(effective_price=selling_price, quantity=qty)
         line_cogs     = cogs_per_unit * qty
 
         return_item.selling_price = selling_price
@@ -1667,7 +1674,7 @@ def accept_return(*, return_id: int, user) -> Return:
         amount=-total_return_amount,
         method=Payment.Method.CASH,  # credit note — reduces customer outstanding
         payment_date=timezone.localtime(timezone.now()).date(),
-        note=f"Auto credit note for Return {return_record.reference_number}",
+        note=f"{RETURN_CREDIT_NOTE_PREFIX}{return_record.reference_number}",
         created_by=user,
         updated_by=user,
     )

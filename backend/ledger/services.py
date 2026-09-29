@@ -536,6 +536,32 @@ def add_customer_return_entry(
 # ---------------------------------------------------------------------------
 
 @transaction.atomic
+def refresh_customer_return_entries(*, ledger_id: int, amounts_by_entry_id: dict) -> None:
+    """
+    Corrects the credit on existing return entries of ONE customer ledger
+    ({entry_id: new_amount}) — used by billing's backfill_return_valuation.
+    Date/reference/details are left as they were. Takes the same per-ledger
+    write lock as the add-entry services, then recalculates the monthly
+    snapshots ONCE from the earliest affected month (not once per entry).
+    """
+    if not amounts_by_entry_id:
+        return
+    ledger  = CustomerLedger.objects.select_for_update().get(pk=ledger_id)
+    entries = list(CustomerLedgerEntry.objects.filter(
+        ledger=ledger,
+        entry_type=CustomerLedgerEntry.EntryType.RETURN,
+        pk__in=list(amounts_by_entry_id),
+    ))
+    for entry in entries:
+        entry.credit = amounts_by_entry_id[entry.pk]
+    CustomerLedgerEntry.objects.bulk_update(entries, ["credit"], batch_size=500)
+    if entries:
+        _recalculate_customer_snapshots_from(
+            ledger, min(_get_year_month(e.date) for e in entries),
+        )
+
+
+@transaction.atomic
 def remove_customer_ledger_entry_for_payment(*, payment) -> None:
     """
     Removes ledger entry linked to a billing payment (deleted payment).

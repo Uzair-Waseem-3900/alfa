@@ -668,6 +668,20 @@ def sync_invoice_return_accepted(
     )
 
 
+def sync_customer_returns_value_corrected(*, delta: Decimal, user) -> None:
+    """
+    Data repair (billing's backfill_return_valuation): accepted returns were
+    re-valued by `delta` in total. Moves customer_outstanding and
+    total_customer_returns_value together, exactly as
+    sync_invoice_return_accepted does. No cash movement.
+    """
+    _adjust_cashflow(
+        customer_outstanding_delta         = -delta,
+        total_customer_returns_value_delta = +delta,
+        user=user,
+    )
+
+
 def sync_purchase_order_confirmed(*, net_payable: Decimal, advance_amount: Decimal, user) -> None:
     """
     Called when a purchase order is confirmed.

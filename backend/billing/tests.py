@@ -1610,3 +1610,266 @@ class AdvanceCapTrimsCashTests(BillingTestBase):
         )
         counter, events = self._counter_vs_events()
         self.assertEqual(counter, events)
+
+
+class ReturnValuationTests(BillingTestBase):
+    """A return is worth what the invoice billed (effective price x qty), and
+    backfill_return_valuation repairs every stored copy of old list-price
+    returns, including the customer ledger."""
+
+    def make_invoice(self, specs, customer=None):
+        """specs = [(code, list_price, discount, qty)] -> confirmed invoice."""
+        customer = customer or self.customer
+        items = []
+        products = []
+        for code, price, discount, qty in specs:
+            p = self.make_stocked_product(code=code, name=code, stock=qty + 5, selling_price=str(price))
+            products.append((p, discount))
+            items.append({"product_id": p.id, "quantity": qty})
+        invoice = create_invoice(customer_id=customer.id, items=items, user=self.admin)
+        for p, discount in products:
+            invoice.items.filter(product=p).update(discount=Decimal(str(discount)))
+        self.allocate_invoice_items(invoice)
+        return confirm_invoice(invoice_id=invoice.id, user=self.admin)
+
+    def return_all(self, invoice):
+        ret = create_return(
+            invoice_id=invoice.id,
+            items=[{"invoice_item_id": i.id, "quantity": i.quantity} for i in invoice.items.all()],
+            user=self.admin,
+        )
+        self.allocate_return_items(ret)
+        return ret
+
+    def db_name(self):
+        from pathlib import Path
+        s = connection.settings_dict
+        return f"{Path(str(s['NAME'])).name}@{s.get('HOST') or 'local'}"
+
+    def apply_args(self):
+        return ["--apply", "--confirm-db", self.db_name(), "--user-email", self.admin.email]
+
+    def corrupt_to_list_price(self, ret):
+        """Re-create the OLD behaviour's stored state for an accepted return."""
+        from cash_flow.models import CashFlow
+        from ledger.models import CustomerLedgerEntry
+        from ledger.services import _recalculate_customer_snapshots_from, _get_year_month
+        from .models import ReturnItem
+        from .services import _sync_invoice_payment_summary
+
+        ret.refresh_from_db()
+        old_total = Decimal("0")
+        for ri in ret.items.select_related("invoice_item"):
+            price = ri.invoice_item.selling_price
+            ReturnItem.objects.filter(pk=ri.pk).update(selling_price=price, line_total=price * ri.quantity)
+            old_total += price * ri.quantity
+        diff = old_total - ret.total_return_amount
+        Return.objects.filter(pk=ret.pk).update(total_return_amount=old_total)
+        Payment.objects.filter(note__endswith=ret.reference_number, amount__lt=0).update(amount=-old_total)
+        entry = CustomerLedgerEntry.objects.get(customer_return=ret)
+        CustomerLedgerEntry.objects.filter(pk=entry.pk).update(credit=old_total)
+        _recalculate_customer_snapshots_from(entry.ledger, _get_year_month(entry.date))
+        cf = CashFlow.get_instance()
+        cf.total_customer_returns_value += diff
+        cf.customer_outstanding = max(Decimal("0"), cf.customer_outstanding - diff)
+        cf.save()
+        invoice = ret.invoice
+        invoice.refresh_from_db()
+        _sync_invoice_payment_summary(invoice)
+        return diff
+
+    def make_corrupted(self, customer=None, code="A1"):
+        from cash_flow.models import CashFlow
+        invoice = self.make_invoice([(code, 230, -10, 10), (code + "x", 430, 40, 2)], customer=customer)
+        ret = self.return_all(invoice)
+        accept_return(return_id=ret.id, user=self.admin)
+        cf = CashFlow.get_instance()
+        base = (cf.total_customer_returns_value, cf.customer_outstanding)
+        self.corrupt_to_list_price(ret)
+        return invoice, ret, base
+
+    # -- live behaviour ---------------------------------------------------
+    def test_full_return_of_discounted_and_surcharged_bill_zeroes_outstanding(self):
+        from ledger.models import CustomerLedgerEntry
+
+        # Mirrors BILL-2026-0453: a surcharge line and a discount line.
+        invoice = self.make_invoice([("A1", 230, -10, 10), ("B1", 430, 40, 2)])
+        self.assertEqual(invoice.grand_total, Decimal("3180"))
+        ret = self.return_all(invoice)
+        accept_return(return_id=ret.id, user=self.admin)
+
+        invoice.refresh_from_db()
+        ret.refresh_from_db()
+        self.assertEqual(ret.total_return_amount, Decimal("3180"))
+        self.assertEqual(invoice.credit_outstanding, Decimal("0"))
+        self.assertEqual(invoice.status, Invoice.Status.RETURNED)
+        self.assertEqual(invoice.payment_status, Invoice.PaymentStatus.PAID)
+        prices = {i.invoice_item.product.code: i.selling_price for i in ret.items.all()}
+        self.assertEqual(prices, {"A1": Decimal("240"), "B1": Decimal("390")})
+        self.assertEqual(Payment.objects.get(note__endswith=ret.reference_number).amount, Decimal("-3180"))
+        self.assertEqual(CustomerLedgerEntry.objects.get(customer_return=ret).credit, Decimal("3180"))
+
+    def test_pending_return_shows_effective_price(self):
+        invoice = self.make_invoice([("A1", 100, 10, 7)])
+        ret = self.return_all(invoice)
+        item = ret.items.get()
+        self.assertEqual(item.selling_price, Decimal("90"))
+        self.assertEqual(item.line_total, Decimal("630"))
+
+    def test_partial_returns_add_up_to_invoice_total(self):
+        invoice = self.make_invoice([("A1", 100, 10, 7)])
+        item = invoice.items.get()
+        for qty in (3, 4):
+            ret = create_return(invoice_id=invoice.id, items=[{"invoice_item_id": item.id, "quantity": qty}], user=self.admin)
+            self.allocate_return_items(ret)
+            accept_return(return_id=ret.id, user=self.admin)
+        invoice.refresh_from_db()
+        self.assertEqual(sum(r.total_return_amount for r in invoice.returns.all()), Decimal("630"))
+        self.assertEqual(invoice.credit_outstanding, Decimal("0"))
+
+    # -- repair command ---------------------------------------------------
+    def test_dry_run_writes_nothing_and_apply_needs_confirmation(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        invoice, ret, _ = self.make_corrupted()
+        stale = Return.objects.get(pk=ret.pk).total_return_amount
+        out = StringIO()
+        call_command("backfill_return_valuation", stdout=out)
+        self.assertEqual(Return.objects.get(pk=ret.pk).total_return_amount, stale)
+        self.assertIn("DRY RUN", out.getvalue())
+        with self.assertRaises(CommandError):
+            call_command("backfill_return_valuation", "--apply", stdout=StringIO())
+        with self.assertRaises(CommandError):
+            call_command("backfill_return_valuation", "--apply", "--confirm-db", "wrong",
+                         "--user-email", self.admin.email, stdout=StringIO())
+        self.assertEqual(Return.objects.get(pk=ret.pk).total_return_amount, stale)
+
+    def test_apply_repairs_every_copy_including_ledger_and_is_idempotent(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from django.db.models import Sum
+        from cash_flow.models import CashFlow
+        from ledger.models import CustomerLedgerEntry, CustomerLedgerSnapshot
+
+        invoice, ret, base = self.make_corrupted()
+        cf_before = CashFlow.get_instance()
+        cash_before = (cf_before.cash_in_hand, cf_before.total_cash_inflow, cf_before.total_cash_outflow)
+        method_before = PaymentMethod.objects.get(pk=self.cash.pk).balance
+        self.assertNotEqual(Return.objects.get(pk=ret.pk).total_return_amount, Decimal("3180"))
+
+        call_command("backfill_return_valuation", *self.apply_args(), stdout=StringIO())
+
+        ret.refresh_from_db()
+        invoice.refresh_from_db()
+        self.assertEqual(ret.total_return_amount, Decimal("3180"))
+        self.assertEqual({i.selling_price for i in ret.items.all()}, {Decimal("240"), Decimal("390")})
+        self.assertEqual(Payment.objects.get(note__endswith=ret.reference_number).amount, Decimal("-3180"))
+        entry = CustomerLedgerEntry.objects.get(customer_return=ret)
+        self.assertEqual(entry.credit, Decimal("3180"))
+        agg = CustomerLedgerEntry.objects.filter(ledger=entry.ledger).aggregate(d=Sum("debit"), c=Sum("credit"))
+        latest = CustomerLedgerSnapshot.objects.filter(ledger=entry.ledger).order_by("-year_month").first()
+        self.assertEqual(latest.closing_balance, agg["d"] - agg["c"])
+        self.assertEqual(latest.closing_balance, Decimal("0"))   # sale 3180 - return 3180
+        self.assertEqual(invoice.credit_outstanding, Decimal("0"))
+        cf = CashFlow.get_instance()
+        self.assertEqual((cf.total_customer_returns_value, cf.customer_outstanding), base)
+        # A return never moves cash
+        self.assertEqual((cf.cash_in_hand, cf.total_cash_inflow, cf.total_cash_outflow), cash_before)
+        self.assertEqual(PaymentMethod.objects.get(pk=self.cash.pk).balance, method_before)
+
+        # Idempotent: a second run finds nothing and changes nothing.
+        out = StringIO()
+        call_command("backfill_return_valuation", stdout=out)
+        self.assertIn("Accepted returns needing a fix: 0", out.getvalue())
+        call_command("backfill_return_valuation", *self.apply_args(), stdout=StringIO())
+        cf2 = CashFlow.get_instance()
+        self.assertEqual((cf2.total_customer_returns_value, cf2.customer_outstanding), base)
+
+    def test_ledger_only_drift_is_repaired(self):
+        """Return total already right but its ledger credit is stale (the BILL-0453 shape)."""
+        from io import StringIO
+        from django.core.management import call_command
+        from ledger.models import CustomerLedgerEntry
+
+        invoice = self.make_invoice([("A1", 230, -10, 10), ("B1", 430, 40, 2)])
+        ret = self.return_all(invoice)
+        accept_return(return_id=ret.id, user=self.admin)
+        CustomerLedgerEntry.objects.filter(customer_return=ret).update(credit=Decimal("3160"))
+
+        call_command("backfill_return_valuation", *self.apply_args(), stdout=StringIO())
+        self.assertEqual(CustomerLedgerEntry.objects.get(customer_return=ret).credit, Decimal("3180"))
+
+    def test_pending_return_snapshot_refreshed(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from .models import ReturnItem
+
+        invoice = self.make_invoice([("A1", 100, 10, 7)])
+        ret = self.return_all(invoice)
+        ReturnItem.objects.filter(return_record=ret).update(selling_price=Decimal("100"), line_total=Decimal("700"))
+        call_command("backfill_return_valuation", *self.apply_args(), stdout=StringIO())
+        item = ret.items.get()
+        self.assertEqual((item.selling_price, item.line_total), (Decimal("90"), Decimal("630")))
+
+    def test_name_only_confirmation_is_rejected(self):
+        from io import StringIO
+        from pathlib import Path
+        from django.core.management import call_command
+        from django.core.management.base import CommandError
+
+        name_only = Path(str(connection.settings_dict["NAME"])).name
+        with self.assertRaises(CommandError):
+            call_command("backfill_return_valuation", "--apply", "--confirm-db", name_only,
+                         "--user-email", self.admin.email, stdout=StringIO())
+
+    def test_return_ref_scopes_repair_and_cashflow_to_that_return(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from cash_flow.models import CashFlow
+
+        _, ret_a, _ = self.make_corrupted(code="A1")
+        cust = create_customer(name="Other", code="OTH", address="X", user=self.admin)
+        _, ret_b, _ = self.make_corrupted(customer=cust, code="Z1")
+        stale_b = Return.objects.get(pk=ret_b.pk).total_return_amount
+        cf_before = CashFlow.get_instance().total_customer_returns_value
+
+        call_command("backfill_return_valuation", *self.apply_args(),
+                     "--return-ref", ret_a.reference_number, stdout=StringIO())
+
+        self.assertEqual(Return.objects.get(pk=ret_a.pk).total_return_amount, Decimal("3180"))
+        self.assertEqual(Return.objects.get(pk=ret_b.pk).total_return_amount, stale_b)
+        # only A's change (list-price 3160 -> billed 3180 = +20) reached CashFlow, not B's
+        self.assertEqual(CashFlow.get_instance().total_customer_returns_value - cf_before, Decimal("20"))
+
+    def test_missing_credit_note_is_reported_and_other_copies_still_repaired(self):
+        from io import StringIO
+        from django.core.management import call_command
+        from ledger.models import CustomerLedgerEntry
+
+        _, ret, _ = self.make_corrupted()
+        Payment.objects.filter(note__endswith=ret.reference_number).update(is_deleted=True)
+
+        out = StringIO()
+        call_command("backfill_return_valuation", stdout=out)
+        self.assertIn("ANOMALY", out.getvalue())
+        self.assertIn("0 credit-note payments", out.getvalue())
+
+        call_command("backfill_return_valuation", *self.apply_args(), stdout=StringIO())
+        self.assertEqual(Return.objects.get(pk=ret.pk).total_return_amount, Decimal("3180"))
+        self.assertEqual(CustomerLedgerEntry.objects.get(customer_return=ret).credit, Decimal("3180"))
+
+    def test_dry_run_query_count_flat_as_corrupted_returns_grow(self):
+        from io import StringIO
+        from django.core.management import call_command
+
+        self.make_corrupted(code="A1")
+        with CaptureQueriesContext(connection) as one:
+            call_command("backfill_return_valuation", stdout=StringIO())
+        for n in range(3):
+            cust = create_customer(name=f"Cust {n}", code=f"C{n}", address="X", user=self.admin)
+            self.make_corrupted(customer=cust, code=f"Z{n}")
+        with CaptureQueriesContext(connection) as many:
+            call_command("backfill_return_valuation", stdout=StringIO())
+        self.assertEqual(len(one), len(many))

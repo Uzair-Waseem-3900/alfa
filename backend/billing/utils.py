@@ -73,6 +73,19 @@ def quantize(value: Decimal) -> Decimal:
     return value.quantize(PRECISION, rounding=ROUND_HALF_UP)
 
 
+def calculate_return_line_total(*, effective_price, quantity) -> Decimal:
+    """
+    Single source of truth for what a returned line is worth: the quantity
+    at the price the customer was actually billed (effective_price =
+    selling_price - discount, so a surcharge - negative discount - is
+    included too), NOT the list selling_price. A full return therefore
+    credits exactly what the invoice billed and outstanding reaches zero.
+
+    Tax (GST/WHT) is deliberately not part of a return's value yet.
+    """
+    return quantize(Decimal(str(effective_price)) * Decimal(str(quantity)))
+
+
 def calculate_line_item(
     *,
     quantity: int,

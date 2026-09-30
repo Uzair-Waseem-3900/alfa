@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Navigate, useNavigate, Link } from 'react-router-dom';
-import { Plus, Pencil, Trash2, Wallet, ArrowLeftRight, ShieldCheck } from 'lucide-react';
+import { Plus, Trash2, Wallet, ArrowLeftRight, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -75,12 +75,6 @@ const PaymentMethodsListPage = () => {
         }
     };
 
-    const handleEdit = (method) => {
-        setEditingMethod(method);
-        setFormData({ name: method.name || '', account_number: method.account_number || '' });
-        setShowModal(true);
-    };
-
     const handleDelete = async (id) => {
         try {
             await deleteMethod(id);
@@ -134,14 +128,6 @@ const PaymentMethodsListPage = () => {
             width: '100px',
             render: (_value, row) => (
                 <div className="flex gap-1">
-                    <button
-                        onClick={(e) => { e.stopPropagation(); handleEdit(row); }}
-                        disabled={row.is_protected}
-                        className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-primary-600 hover:bg-primary-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-                        aria-label="Edit payment method"
-                    >
-                        <Pencil className="w-4 h-4" />
-                    </button>
                     <button
                         onClick={(e) => { e.stopPropagation(); setDeleteConfirm(row); }}
                         disabled={row.is_protected}

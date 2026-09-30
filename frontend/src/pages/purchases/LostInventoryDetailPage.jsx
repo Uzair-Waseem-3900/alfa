@@ -184,15 +184,16 @@ const LostInventoryDetailPage = () => {
     const [loading, setLoading] = useState(true);
     const [modalItem, setModalItem] = useState(null);   // item to mark-as-found
 
-    const fetchRecord = async () => {
-        setLoading(true);
+    // silent=true refetches in place (no full-page spinner) after a mutation.
+    const fetchRecord = async ({ silent = false } = {}) => {
+        if (!silent) setLoading(true);
         try {
             const data = await purchasesApi.lostInventory.getById(recordId);
             setRecord(data);
         } catch (err) {
             console.error('Failed to fetch lost inventory record:', err);
             toast.error(extractErrorMessage(err, 'Failed to load lost inventory record'));
-            setRecord(null);
+            if (!silent) setRecord(null);
         } finally {
             setLoading(false);
         }
@@ -205,7 +206,7 @@ const LostInventoryDetailPage = () => {
     const handleMarkFoundSuccess = async () => {
         const itemName = modalItem?.product_name;
         setModalItem(null);
-        await fetchRecord();
+        await fetchRecord({ silent: true });
         toast.success(`Stock restored for "${itemName}"`);
     };
 

@@ -42,6 +42,7 @@ const ReturnDetailPage = () => {
     const [formLoading, setFormLoading] = useState(false);
     const [showAcceptConfirm, setShowAcceptConfirm] = useState(false);
     const [acceptLoading, setAcceptLoading] = useState(false);
+    const [bulkSaving, setBulkSaving] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
     const [cancelLoading, setCancelLoading] = useState(false);
 
@@ -50,8 +51,11 @@ const ReturnDetailPage = () => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [returnId]);
 
-    const fetchReturnDetails = async () => {
-        setLoading(true);
+    // silent=true refetches in place (no full-page spinner); `reseed` limits
+    // which items' allocation drafts the refetch may overwrite ('all' or an
+    // array of return-item ids) so unsaved edits on other items survive.
+    const fetchReturnDetails = async ({ silent = false, reseed = 'all' } = {}) => {
+        if (!silent) setLoading(true);
         setLoadError('');
         try {
             // Fetch the single return directly by id rather than paging
@@ -77,6 +81,10 @@ const ReturnDetailPage = () => {
                 setShelfState((prev) => {
                     const next = {};
                     foundReturn.items.forEach((item) => {
+                        if (reseed !== 'all' && prev[item.id] && !reseed.includes(item.id)) {
+                            next[item.id] = prev[item.id];
+                            return;
+                        }
                         next[item.id] = {
                             allocations: (item.shelf_allocations || []).map((a) => ({
                                 shelf_id: a.shelf_id,
@@ -94,10 +102,15 @@ const ReturnDetailPage = () => {
             }
         } catch (error) {
             console.error('Failed to fetch return details:', error);
-            setReturnItem(null);
-            setInvoice(null);
-            if (error?.response?.status !== 404) {
-                setLoadError(extractErrorMessage(error, 'Failed to load return details.'));
+            if (silent) {
+                // Keep what's on screen; a failed background refresh shouldn't blank the page.
+                toast.error(extractErrorMessage(error, 'Failed to refresh return details.'));
+            } else {
+                setReturnItem(null);
+                setInvoice(null);
+                if (error?.response?.status !== 404) {
+                    setLoadError(extractErrorMessage(error, 'Failed to load return details.'));
+                }
             }
         } finally {
             setLoading(false);
@@ -117,18 +130,62 @@ const ReturnDetailPage = () => {
         }));
     };
 
+    const buildAllocationPayload = (itemId) => (shelfState[itemId]?.allocations || [])
+        .filter((a) => a.shelf_id !== '' && a.quantity !== '')
+        .map((a) => ({ shelf_id: parseInt(a.shelf_id, 10), quantity: parseInt(a.quantity, 10) }));
+
+    const allItemsFullyAllocated = (returnItem?.items || []).every((item) => {
+        const total = (shelfState[item.id]?.allocations || [])
+            .reduce((sum, a) => sum + (parseInt(a.quantity, 10) || 0), 0);
+        return total === item.quantity;
+    });
+
+    // One click saves every item's rows. Sequential, not Promise.all — each
+    // save is a real DB write and concurrent writes cause "database is
+    // locked" 500s on SQLite. Items that fail keep their unsaved drafts.
+    const handleSaveAllAllocations = async () => {
+        if (!returnItem?.items?.length) return;
+        setBulkSaving(true);
+        setShelfState((prev) => {
+            const next = {};
+            Object.keys(prev).forEach((k) => { next[k] = { ...prev[k], error: '' }; });
+            return next;
+        });
+        const savedIds = [];
+        let failedCount = 0;
+        for (const item of returnItem.items) {
+            try {
+                await billingApi.returnItems.setShelfAllocations(item.id, buildAllocationPayload(item.id));
+                savedIds.push(item.id);
+            } catch (error) {
+                console.error(`Failed to save shelf allocations for item ${item.id}:`, error);
+                failedCount += 1;
+                const message = extractErrorMessage(error, 'Failed to save shelf allocations.');
+                setShelfState((prev) => ({
+                    ...prev,
+                    [item.id]: { ...prev[item.id], error: message },
+                }));
+            }
+        }
+        if (failedCount > 0) {
+            toast.error(`Failed to save allocations for ${failedCount} item(s) — see details below.`);
+        } else {
+            toast.success('All shelf allocations saved.');
+        }
+        await fetchReturnDetails({ silent: true, reseed: savedIds });
+        setBulkSaving(false);
+    };
+
     const handleSaveAllocations = async (itemId) => {
         setShelfState((prev) => ({
             ...prev,
             [itemId]: { ...prev[itemId], saving: true, error: '' },
         }));
         try {
-            const allocations = (shelfState[itemId]?.allocations || [])
-                .filter((a) => a.shelf_id !== '' && a.quantity !== '')
-                .map((a) => ({ shelf_id: parseInt(a.shelf_id, 10), quantity: parseInt(a.quantity, 10) }));
+            const allocations = buildAllocationPayload(itemId);
             await billingApi.returnItems.setShelfAllocations(itemId, allocations);
             toast.success('Shelf allocations saved.');
-            await fetchReturnDetails();
+            await fetchReturnDetails({ silent: true, reseed: [itemId] });
         } catch (error) {
             console.error('Failed to save shelf allocations:', error);
             const message = extractErrorMessage(error, 'Failed to save shelf allocations.');
@@ -145,7 +202,7 @@ const ReturnDetailPage = () => {
             await billingApi.returns.accept(returnId);
             setShowAcceptConfirm(false);
             toast.success('Return accepted successfully.');
-            await fetchReturnDetails();
+            await fetchReturnDetails({ silent: true });
         } catch (error) {
             console.error('Failed to accept return:', error);
             toast.error(extractErrorMessage(error, 'Failed to accept return.'));
@@ -419,10 +476,25 @@ const ReturnDetailPage = () => {
             {/* Shelf Allocation (put-away) - editable while pending, read-only afterwards */}
             {returnItem.items && returnItem.items.length > 0 && (
                 <Card className="p-6">
-                    <h3 className="font-semibold text-neutral-900 mb-4 flex items-center gap-2">
-                        <Warehouse className="w-4 h-4 text-neutral-400" />
-                        Shelf Allocation (Put-Away)
-                    </h3>
+                    <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+                        <h3 className="font-semibold text-neutral-900 flex items-center gap-2">
+                            <Warehouse className="w-4 h-4 text-neutral-400" />
+                            Shelf Allocation (Put-Away)
+                        </h3>
+                        {returnItem.status === 'pending' && (
+                            <Button
+                                size="sm"
+                                onClick={handleSaveAllAllocations}
+                                loading={bulkSaving}
+                                disabled={
+                                    !allItemsFullyAllocated
+                                    || Object.values(shelfState).some((s) => s.saving)
+                                }
+                            >
+                                Save All Allocations
+                            </Button>
+                        )}
+                    </div>
                     {returnItem.status === 'pending' ? (
                         <div className="space-y-4">
                             {returnItem.items.map((item) => {
@@ -446,7 +518,7 @@ const ReturnDetailPage = () => {
                                             onSearchShelves={searchShelvesForPutAway}
                                             requiredQuantity={item.quantity}
                                             mode="putaway"
-                                            disabled={state.saving}
+                                            disabled={state.saving || bulkSaving}
                                         />
                                         {state.error && (
                                             <p className="text-sm text-red-600 mt-2">{state.error}</p>
@@ -456,6 +528,7 @@ const ReturnDetailPage = () => {
                                                 size="sm"
                                                 onClick={() => handleSaveAllocations(item.id)}
                                                 loading={state.saving}
+                                                disabled={bulkSaving}
                                             >
                                                 Save Allocations
                                             </Button>

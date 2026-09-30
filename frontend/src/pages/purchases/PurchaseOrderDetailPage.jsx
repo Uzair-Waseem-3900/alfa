@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Printer, FileDown, CreditCard, Undo2, Pencil, CheckCircle2, Trash2, FileText } from 'lucide-react';
@@ -51,6 +51,11 @@ const PurchaseOrderDetailPage = () => {
     const [showEditModal, setShowEditModal] = useState(false);
     const [allocationDrafts, setAllocationDrafts] = useState({});
     const [savingAllocationFor, setSavingAllocationFor] = useState(null);
+    const [savingAllAllocations, setSavingAllAllocations] = useState(false);
+    // Which items' drafts the next order refetch may overwrite: 'all', or an
+    // array of item ids (so a silent refetch after saving one item doesn't
+    // wipe unsaved edits on the others).
+    const reseedRef = useRef('all');
     const [confirmError, setConfirmError] = useState('');
     const [confirmOrderOpen, setConfirmOrderOpen] = useState(false);
     const [confirmingOrder, setConfirmingOrder] = useState(false);
@@ -70,9 +75,12 @@ const PurchaseOrderDetailPage = () => {
     // (initial load and after every refetch following a save/confirm).
     useEffect(() => {
         if (!order?.items) return;
+        const reseed = reseedRef.current;
+        reseedRef.current = 'all';
         setAllocationDrafts((prev) => {
             const next = { ...prev };
             order.items.forEach((item) => {
+                if (reseed !== 'all' && item.id in prev && !reseed.includes(item.id)) return;
                 next[item.id] = (item.shelf_allocations || []).map((a) => ({
                     shelf_id: a.shelf.id,
                     quantity: a.quantity,
@@ -92,14 +100,18 @@ const PurchaseOrderDetailPage = () => {
         return results.map((s) => ({ value: s.id, label: s.name, name: s.name }));
     };
 
-    const fetchData = async () => {
-        setLoading(true);
+    // silent=true refetches in place (no full-page spinner) so only the parts
+    // whose data changed re-render; `reseed` limits which allocation drafts
+    // the refetch may overwrite.
+    const fetchData = async ({ silent = false, reseed = 'all' } = {}) => {
+        if (!silent) setLoading(true);
         setLoadError('');
         try {
             const [orderData, summaryData] = await Promise.all([
                 purchasesApi.orders.getById(id),
                 purchasesApi.orders.getPaymentSummary(id),
             ]);
+            reseedRef.current = reseed;
             setOrder(orderData);
             setPaymentSummary(summaryData);
 
@@ -256,15 +268,49 @@ const PurchaseOrderDetailPage = () => {
         }
     };
 
+    const buildAllocationPayload = (itemId) => (allocationDrafts[itemId] || [])
+        .filter((a) => a.shelf_id && a.quantity)
+        .map((a) => ({ shelf_id: parseInt(a.shelf_id, 10), quantity: parseInt(a.quantity, 10) }));
+
+    const allItemsFullyAllocated = (order?.items || []).every((item) => {
+        const total = (allocationDrafts[item.id] || [])
+            .reduce((sum, a) => sum + (parseInt(a.quantity, 10) || 0), 0);
+        return total === item.quantity;
+    });
+
+    // One click saves every item's rows. Sequential, not Promise.all — each
+    // save is a real DB write and concurrent writes cause "database is
+    // locked" 500s on SQLite. Items that fail keep their unsaved drafts.
+    const handleSaveAllAllocations = async () => {
+        if (!order?.items?.length) return;
+        setSavingAllAllocations(true);
+        const savedIds = [];
+        const failedNames = [];
+        for (const item of order.items) {
+            try {
+                await purchasesApi.purchaseItems.setShelfAllocations(item.id, buildAllocationPayload(item.id));
+                savedIds.push(item.id);
+            } catch (error) {
+                console.error(`Failed to save shelf allocations for item ${item.id}:`, error);
+                failedNames.push(item.product_name);
+            }
+        }
+        if (failedNames.length > 0) {
+            toast.error(`Failed to save allocations for: ${failedNames.join(', ')}`);
+        } else {
+            toast.success('All shelf allocations saved');
+        }
+        await fetchData({ silent: true, reseed: savedIds });
+        setSavingAllAllocations(false);
+    };
+
     const handleSaveAllocations = async (itemId) => {
-        const allocations = (allocationDrafts[itemId] || [])
-            .filter((a) => a.shelf_id && a.quantity)
-            .map((a) => ({ shelf_id: parseInt(a.shelf_id, 10), quantity: parseInt(a.quantity, 10) }));
+        const allocations = buildAllocationPayload(itemId);
         setSavingAllocationFor(itemId);
         try {
             await purchasesApi.purchaseItems.setShelfAllocations(itemId, allocations);
             toast.success('Shelf allocations saved');
-            await fetchData();
+            await fetchData({ silent: true, reseed: [itemId] });
         } catch (error) {
             console.error('Failed to save shelf allocations:', error);
             toast.error(extractErrorMessage(error, 'Failed to save shelf allocations'));
@@ -522,7 +568,17 @@ const PurchaseOrderDetailPage = () => {
 
                     {/* Put-Away — shelf allocation for draft orders, required before confirm */}
                     <Card className="p-6">
-                        <h3 className="font-semibold text-neutral-900 mb-3">Put-Away (Shelf Allocation)</h3>
+                        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                            <h3 className="font-semibold text-neutral-900">Put-Away (Shelf Allocation)</h3>
+                            <Button
+                                size="sm"
+                                onClick={handleSaveAllAllocations}
+                                loading={savingAllAllocations}
+                                disabled={!allItemsFullyAllocated || savingAllocationFor !== null}
+                            >
+                                Save All Allocations
+                            </Button>
+                        </div>
                         <p className="text-sm text-neutral-500 mb-4">
                             Allocate each item's full quantity to shelves before confirming this order.
                         </p>
@@ -541,13 +597,14 @@ const PurchaseOrderDetailPage = () => {
                                         onSearchShelves={searchShelvesForPutAway}
                                         requiredQuantity={item.quantity}
                                         mode="putaway"
-                                        disabled={savingAllocationFor === item.id}
+                                        disabled={savingAllocationFor === item.id || savingAllAllocations}
                                     />
                                     <div className="flex justify-end mt-3">
                                         <Button
                                             size="sm"
                                             onClick={() => handleSaveAllocations(item.id)}
                                             loading={savingAllocationFor === item.id}
+                                            disabled={savingAllAllocations}
                                         >
                                             Save Allocations
                                         </Button>

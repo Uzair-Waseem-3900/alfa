@@ -24,6 +24,16 @@ const defaultDueDate = () => daysFromTodayLocalDate(7);
 // single display string.
 const firstMsg = (val) => (Array.isArray(val) ? val[0] : val);
 
+const ADDRESS_MAX_LENGTH = 60;
+
+// Address is a multi-line text field: collapse whitespace so the dropdown
+// option stays on one line, and truncate so a long address can't stretch it.
+const formatAddress = (address) => {
+    const clean = (address || '').replace(/\s+/g, ' ').trim();
+    if (!clean) return 'Address not stored';
+    return clean.length > ADDRESS_MAX_LENGTH ? `${clean.slice(0, ADDRESS_MAX_LENGTH).trimEnd()}…` : clean;
+};
+
 const CreateInvoicePage = () => {
     const navigate = useNavigate();
     const { toast } = useToast();
@@ -48,7 +58,7 @@ const CreateInvoicePage = () => {
     const searchCustomers = async (query) => {
         const res = await billingApi.customers.getAll({ search: query, page_size: 25 });
         const results = res?.results ?? res ?? [];
-        return results.map(c => ({ value: c.id, label: `${c.code} - ${c.name}` }));
+        return results.map(c => ({ value: c.id, label: `${c.code} - ${c.name} (${formatAddress(c.address)})` }));
     };
 
     // Fires only once, right after a customer is actually selected — not on

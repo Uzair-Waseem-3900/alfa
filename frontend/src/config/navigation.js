@@ -123,7 +123,7 @@ export const navGroups = [
     },
     {
         key: 'b2b',
-        label: 'Partner Rates',
+        label: 'B2B Partners',
         icon: Tags,
         adminOnly: true,
         items: [

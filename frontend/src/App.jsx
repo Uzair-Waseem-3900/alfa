@@ -135,6 +135,9 @@ import SalesManDetailPage from './pages/salesMan/SalesManDetailPage';
 import SalesManCustomersPage from './pages/salesMan/SalesManCustomersPage';
 import SalesManInvoicesPage from './pages/salesMan/SalesManInvoicesPage';
 
+// B2B (partner rate list) pages
+import PartnerRatesPage from './pages/b2b/PartnerRatesPage';
+
 // Payment Methods pages
 import PaymentMethodsListPage from './pages/paymentMethods/PaymentMethodsListPage';
 import PaymentMethodDetailPage from './pages/paymentMethods/PaymentMethodDetailPage';
@@ -1030,6 +1033,15 @@ const AppContent = () => {
           <ProtectedRoute>
             <Layout>
               <BackupHistoryPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        {/* B2B Routes */}
+        <Route path="/b2b/partner-rates" element={
+          <ProtectedRoute>
+            <Layout>
+              <PartnerRatesPage />
             </Layout>
           </ProtectedRoute>
         } />

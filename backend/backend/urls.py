@@ -28,6 +28,7 @@ urlpatterns = [
     path("api/accounting/", include("accounting.urls")),
     path("api/payment-methods/", include("payment_methods.urls")),
     path("api/sales-man/", include("sales_man.urls")),
+    path("api/b2b/", include("b2b.urls")),
     path("api/system/catch-up/", TriggerAllCatchUpsView.as_view(), name="trigger-all-catchups"),
     path("api/ping/", PingView.as_view(), name="ping"),
 ]

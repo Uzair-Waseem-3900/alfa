@@ -23,6 +23,20 @@ CUSTOMER_PREFIX = os.getenv("CUSTOMER_PREFIX")
 PATH_ADMIN = os.getenv("PATH_ADMIN")
 COMPANY_NAME=os.getenv("COMPANY_NAME")
 
+# ---- B2B (rate-list sharing between our own softwares) ----
+# This software only READS another software's rate list (consumer half of the
+# b2b app). The two JSON maps are parsed (and a bad value ignored safely) by
+# b2b.config, never here.
+def env_bool(name, default=False):
+    value = os.getenv(name)
+    return default if value is None else value.strip().lower() == "true"
+
+B2B_PROVIDER_ENABLED = env_bool("B2B_PROVIDER_ENABLED")
+B2B_CONSUMER_ENABLED = env_bool("B2B_CONSUMER_ENABLED")
+B2B_PARTNER_SECRETS = os.getenv("B2B_PARTNER_SECRETS", "")          # {"<provider name>": "<shared secret>"}
+B2B_PARTNER_BASE_URLS = os.getenv("B2B_PARTNER_BASE_URLS", "")      # {"<provider name>": "<backend root URL>"}
+B2B_PARTNER_TIMEOUT_SECONDS = os.getenv("B2B_PARTNER_TIMEOUT_SECONDS", "3")          # parsed safely by b2b.config
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -56,6 +70,7 @@ EXTERNAL_APPS = [
     'accounting',
     'payment_methods',
     'sales_man',
+    'b2b',
 ]
 
 INSTALLED_APPS += EXTERNAL_APPS

@@ -137,6 +137,9 @@ import SalesManInvoicesPage from './pages/salesMan/SalesManInvoicesPage';
 
 // B2B (partner rate list) pages
 import PartnerRatesPage from './pages/b2b/PartnerRatesPage';
+import PurchaseRequestsPage from './pages/b2b/PurchaseRequestsPage';
+import CreatePurchaseRequestPage from './pages/b2b/CreatePurchaseRequestPage';
+import PurchaseRequestDetailPage from './pages/b2b/PurchaseRequestDetailPage';
 
 // Payment Methods pages
 import PaymentMethodsListPage from './pages/paymentMethods/PaymentMethodsListPage';
@@ -1042,6 +1045,30 @@ const AppContent = () => {
           <ProtectedRoute>
             <Layout>
               <PartnerRatesPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/b2b/purchase-requests" element={
+          <ProtectedRoute>
+            <Layout>
+              <PurchaseRequestsPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/b2b/purchase-requests/new" element={
+          <ProtectedRoute>
+            <Layout>
+              <CreatePurchaseRequestPage />
+            </Layout>
+          </ProtectedRoute>
+        } />
+
+        <Route path="/b2b/purchase-requests/:id" element={
+          <ProtectedRoute>
+            <Layout>
+              <PurchaseRequestDetailPage />
             </Layout>
           </ProtectedRoute>
         } />

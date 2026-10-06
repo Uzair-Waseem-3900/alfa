@@ -128,6 +128,7 @@ export const navGroups = [
         adminOnly: true,
         items: [
             { name: 'Partner Rate List', path: '/b2b/partner-rates', icon: Tags },
+            { name: 'Purchase Requests', path: '/b2b/purchase-requests', icon: ShoppingCart },
         ],
     },
     {

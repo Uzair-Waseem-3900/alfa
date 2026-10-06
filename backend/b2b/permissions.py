@@ -14,3 +14,10 @@ class IsAdminOrSuperuser(BasePermission):
             and request.user.is_authenticated
             and request.user.is_staff
         )
+
+
+class IsSignedPartner(BasePermission):
+    """Only a request that passed SignedPartnerAuthentication (see authentication.py)."""
+
+    def has_permission(self, request, view):
+        return bool(getattr(request.user, "is_b2b_partner", False))

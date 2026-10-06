@@ -39,7 +39,7 @@ class TriggerAllCatchUpsView(APIView):
     pages/hooks happen to be wired up. Returns only a small confirmation
     object — no dashboard data lives here on purpose.
 
-    There are exactly six such mechanisms in the whole codebase (verified
+    There are exactly seven such mechanisms in the whole codebase (verified
     by two independent sweeps across every app — nothing else uses this
     pattern; every other Flow singleton is kept current at write time,
     event-driven, and needs no trigger):
@@ -54,6 +54,9 @@ class TriggerAllCatchUpsView(APIView):
         5. credit_score — overdue-invoice credit score catch-up, one entry
                           per customer with a newly-overdue invoice
         6. users       — expired JWT token flush (throttled to once/24h)
+        7. b2b         — purchase requests sent to a partner software: re-send,
+                          fetch decisions, import accepted ones (gated by an
+                          indexed existence check + a one-minute marker)
 
     Order matters: assets and investors run first because profits reads
     both of their outputs (asset depreciation for the deduction breakdown,
@@ -79,6 +82,7 @@ class TriggerAllCatchUpsView(APIView):
         balance_sheet_snapshots_created, balance_sheet_error = self._run_balance_sheet_catchup()
         credit_scores_recalculated, credit_score_error = self._run_credit_score_catchup(user=request.user)
         tokens_flushed, tokens_error = self._run_token_flush()
+        b2b_requests_synced, b2b_error = self._run_b2b_catchup()
 
         return Response({
             "assets_processed": assets_processed,
@@ -93,6 +97,8 @@ class TriggerAllCatchUpsView(APIView):
             "credit_score_error": credit_score_error,
             "tokens_flushed": tokens_flushed,
             "tokens_error": tokens_error,
+            "b2b_requests_synced": b2b_requests_synced,
+            "b2b_error": b2b_error,
         })
 
     def _run_asset_catchup(self):
@@ -157,6 +163,19 @@ class TriggerAllCatchUpsView(APIView):
             from credit_score.services import run_overdue_catchup
 
             return run_overdue_catchup(user=user), None
+        except Exception as exc:
+            return 0, str(exc)
+
+    def _run_b2b_catchup(self):
+        """Purchase requests made to a partner software: re-sends any that never
+        reached it, learns the partner's decisions, and creates the confirmed
+        purchase order for accepted ones. One indexed existence check when
+        nothing is outstanding; otherwise the partner is asked at most once a
+        minute. Independent of every other phase (it only touches purchases)."""
+        try:
+            from b2b.request_services import run_catch_up
+
+            return run_catch_up(), None
         except Exception as exc:
             return 0, str(exc)
 

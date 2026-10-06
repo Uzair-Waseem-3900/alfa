@@ -57,3 +57,35 @@ def timeout_seconds() -> float:
         return min(10.0, max(0.5, float(getattr(settings, "B2B_PARTNER_TIMEOUT_SECONDS", 3))))
     except (TypeError, ValueError):
         return 3.0
+
+
+# ---------------------------------------------------------------------------
+# Purchase requests / doorbell
+# ---------------------------------------------------------------------------
+
+_UNITS = {"second": 1, "minute": 60, "hour": 3600, "day": 86400}
+MAX_REQUEST_ITEMS = 100
+SYNC_MIN_INTERVAL_SECONDS = 60
+
+
+def signature_max_age_seconds() -> int:
+    try:
+        return max(1, int(getattr(settings, "B2B_SIGNATURE_MAX_AGE_SECONDS", 60)))
+    except (TypeError, ValueError):
+        return 60
+
+
+def failed_auth_limit():
+    """Parses '10/hour' -> (10, 3600). Falls back to 10/hour when malformed."""
+    raw = str(getattr(settings, "B2B_FAILED_AUTH_LIMIT", "10/hour"))
+    try:
+        count, unit = raw.split("/", 1)
+        return max(1, int(count)), _UNITS[unit.strip().lower()]
+    except (ValueError, KeyError):
+        return 10, 3600
+
+
+def supplier_code_for(provider: str) -> str:
+    """The supplier record that stands for this provider on purchase orders ('' when not set)."""
+    codes = getattr(settings, "B2B_PARTNER_SUPPLIER_CODES", {}) or {}
+    return (codes.get(provider) or "").strip()

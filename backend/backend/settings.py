@@ -36,6 +36,14 @@ B2B_CONSUMER_ENABLED = env_bool("B2B_CONSUMER_ENABLED")
 B2B_PARTNER_SECRETS = os.getenv("B2B_PARTNER_SECRETS", "")          # {"<provider name>": "<shared secret>"}
 B2B_PARTNER_BASE_URLS = os.getenv("B2B_PARTNER_BASE_URLS", "")      # {"<provider name>": "<backend root URL>"}
 B2B_PARTNER_TIMEOUT_SECONDS = os.getenv("B2B_PARTNER_TIMEOUT_SECONDS", "3")          # parsed safely by b2b.config
+# Protects the endpoint a partner software calls (the "doorbell") — safe defaults, no env needed.
+B2B_SIGNATURE_MAX_AGE_SECONDS = os.getenv("B2B_SIGNATURE_MAX_AGE_SECONDS", "60")
+B2B_FAILED_AUTH_LIMIT = os.getenv("B2B_FAILED_AUTH_LIMIT", "10/hour")
+
+# Purchase requests: the supplier record that stands for each partner on the purchase
+# orders this software creates when that partner accepts a request (partner name -> code).
+ALPHAPK_SUPPLIER_CODE = os.getenv("ALPHAPK_SUPPLIER_CODE", "")
+B2B_PARTNER_SUPPLIER_CODES = {"AAA STATIONERY": ALPHAPK_SUPPLIER_CODE}
 
 INSTALLED_APPS = [
     'django.contrib.admin',

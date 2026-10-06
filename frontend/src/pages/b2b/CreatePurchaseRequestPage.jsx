@@ -193,7 +193,6 @@ const CreatePurchaseRequestPage = () => {
                         </p>
                         <SearchableSelect
                             value=""
-                            selectedLabel=""
                             onChange={addProduct}
                             onSearch={searchProducts}
                             placeholder="Search the partner's products..."

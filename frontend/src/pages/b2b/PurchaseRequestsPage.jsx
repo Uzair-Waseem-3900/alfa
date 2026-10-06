@@ -146,7 +146,40 @@ const PurchaseRequestsPage = () => {
                 />
             ) : (
                 <>
-                    <Table columns={columns} data={requests} onRowClick={(row) => navigate(`/b2b/purchase-requests/${row.id}`)} />
+                    {/* Wide screens: the table. Phones: one tappable card per request (no sideways scrolling). */}
+                    <div className="hidden md:block">
+                        <Table columns={columns} data={requests} onRowClick={(row) => navigate(`/b2b/purchase-requests/${row.id}`)} />
+                    </div>
+                    <div className="md:hidden space-y-3">
+                        {requests.map((row) => {
+                            const badge = REQUEST_STATUS_BADGE[row.status] || { variant: 'default', label: row.status };
+                            return (
+                                <button
+                                    key={row.id}
+                                    type="button"
+                                    onClick={() => navigate(`/b2b/purchase-requests/${row.id}`)}
+                                    className="w-full text-left bg-white rounded-2xl p-4 shadow-card active:bg-neutral-50"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <span className="font-semibold text-neutral-900">{row.provider_name}</span>
+                                        <div className="flex flex-wrap justify-end gap-1.5">
+                                            <Badge variant={badge.variant}>{badge.label}</Badge>
+                                            {!row.delivered && row.status === 'pending' && <Badge variant="warning">Waiting to send</Badge>}
+                                            {row.status === 'accepted' && !row.order && <Badge variant="warning">Creating order…</Badge>}
+                                        </div>
+                                    </div>
+                                    <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                                        <dt className="text-neutral-500">Created</dt>
+                                        <dd className="text-right text-neutral-700">{formatDateTime(row.created_at)}</dd>
+                                        <dt className="text-neutral-500">Items</dt>
+                                        <dd className="text-right text-neutral-700">{row.item_count}</dd>
+                                        <dt className="text-neutral-500">Order</dt>
+                                        <dd className="text-right text-neutral-700">{row.order_number || '—'}</dd>
+                                    </dl>
+                                </button>
+                            );
+                        })}
+                    </div>
                     {meta.totalPages > 1 && (
                         <Pagination currentPage={meta.currentPage} totalPages={meta.totalPages} onPageChange={setPage} />
                     )}

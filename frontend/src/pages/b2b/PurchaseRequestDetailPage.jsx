@@ -93,7 +93,7 @@ const PurchaseRequestDetailPage = () => {
                     {request.order_number && (
                         <p className="text-sm mt-2">
                             Purchase order:{' '}
-                            <Link to={`/purchases/orders/${request.order}`} className="font-medium text-primary-600 hover:underline">
+                            <Link to={`/purchases/orders/${request.order}`} className="inline-block py-2 font-medium text-primary-600 hover:underline">
                                 {request.order_number}
                             </Link>
                         </p>
@@ -127,7 +127,32 @@ const PurchaseRequestDetailPage = () => {
                 />
             )}
 
-            <Card className="p-0 overflow-hidden" hover={false}>
+            {/* Phones: one card per item. Wide screens: the table below. */}
+            <div className="md:hidden space-y-3">
+                {request.items.map((item) => (
+                    <Card key={item.id} className="p-4" hover={false}>
+                        <p className="font-semibold text-neutral-900">
+                            {item.product_name} <span className="text-neutral-400 text-sm font-normal">({item.product_code})</span>
+                        </p>
+                        <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                            <dt className="text-neutral-500">Requested</dt>
+                            <dd className="text-right text-neutral-800">{item.requested_quantity}</dd>
+                            <dt className="text-neutral-500">Accepted</dt>
+                            <dd className="text-right font-medium text-neutral-800">{decided ? (item.accepted_quantity ?? 0) : '—'}</dd>
+                            <dt className="text-neutral-500">Price</dt>
+                            <dd className="text-right text-neutral-800">{item.unit_price != null ? `Rs. ${fmt(item.unit_price)}` : '—'}</dd>
+                            <dt className="text-neutral-500">Discount</dt>
+                            <dd className="text-right text-neutral-800">{fmt(item.discount)}</dd>
+                            <dt className="text-neutral-500">GST / WHT</dt>
+                            <dd className="text-right text-neutral-800">{fmt(item.gst)}% / {fmt(item.wht)}%</dd>
+                            <dt className="text-neutral-500">Shelves</dt>
+                            <dd className="text-right text-neutral-800">{item.shelves.map((s) => `${s.shelf_name}: ${s.quantity}`).join(', ') || '—'}</dd>
+                        </dl>
+                    </Card>
+                ))}
+            </div>
+
+            <Card className="hidden md:block p-0 overflow-hidden" hover={false}>
                 <div className="overflow-x-auto">
                     <table className="w-full">
                         <thead>

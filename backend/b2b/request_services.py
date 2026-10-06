@@ -21,8 +21,8 @@ import logging
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db import transaction
-from django.db.models import Q
+from django.db import IntegrityError, transaction
+from django.db.models import Count, Q
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, ValidationError
 
@@ -111,8 +111,8 @@ def _send(request: PurchaseRequest) -> None:
     PurchaseRequest.objects.filter(pk=request.pk, sent_at__isnull=True).update(sent_at=timezone.now())
     request.refresh_from_db(fields=["sent_at"])
     if status != "pending":
-        # A repeat of an already-decided request: learn the outcome right away.
-        sync_requests([request])
+        # A repeat of an already-decided request: learn the outcome right away (the partner just answered).
+        sync_requests([request], checked=True)
 
 
 def create_purchase_request(*, provider: str, items: list, note: str, user, request_uuid=None):
@@ -132,25 +132,39 @@ def create_purchase_request(*, provider: str, items: list, note: str, user, requ
 
     products = _validate_new_request(provider, items)
 
-    with transaction.atomic():
-        extra = {"request_uuid": request_uuid} if request_uuid is not None else {}
-        request = PurchaseRequest.objects.create(provider_name=provider, note=note or "", created_by=user, **extra)
-        # Two bulk inserts for the whole request (not two per item).
-        lines = PurchaseRequestItem.objects.bulk_create([
-            PurchaseRequestItem(
-                request=request, product=products[item["product_id"]],
-                product_code=products[item["product_id"]].code,
-                product_name=products[item["product_id"]].name,
-                requested_quantity=item["quantity"],
-                discount=item["discount"], gst=item["gst"], wht=item["wht"],
-            )
-            for item in items
-        ])
-        PurchaseRequestShelf.objects.bulk_create([
-            PurchaseRequestShelf(item=line, shelf_id=a["shelf_id"], quantity=a["quantity"])
-            for line, item in zip(lines, items)
-            for a in item["shelf_allocations"]
-        ])
+    # The partner must answer a wake-up check BEFORE anything is saved here or sent there.
+    client.ensure_awake(provider)
+
+    try:
+        with transaction.atomic():
+            extra = {"request_uuid": request_uuid} if request_uuid is not None else {}
+            request = PurchaseRequest.objects.create(provider_name=provider, note=note or "", created_by=user, **extra)
+            # Two bulk inserts for the whole request (not two per item).
+            lines = PurchaseRequestItem.objects.bulk_create([
+                PurchaseRequestItem(
+                    request=request, product=products[item["product_id"]],
+                    product_code=products[item["product_id"]].code,
+                    product_name=products[item["product_id"]].name,
+                    requested_quantity=item["quantity"],
+                    discount=item["discount"], gst=item["gst"], wht=item["wht"],
+                )
+                for item in items
+            ])
+            PurchaseRequestShelf.objects.bulk_create([
+                PurchaseRequestShelf(item=line, shelf_id=a["shelf_id"], quantity=a["quantity"])
+                for line, item in zip(lines, items)
+                for a in item["shelf_allocations"]
+            ])
+    except IntegrityError:
+        # A double-click of the same form (same request_uuid) raced us while the wake check was
+        # running: the other one won. Return it instead of failing.
+        winner = (
+            PurchaseRequest.objects.filter(provider_name=provider, request_uuid=request_uuid).first()
+            if request_uuid is not None else None
+        )
+        if winner is None:
+            raise
+        return winner, winner.sent_at is not None
 
     try:
         _send(request)
@@ -179,6 +193,7 @@ def cancel_purchase_request(*, request_id: int) -> PurchaseRequest:
     if request.status != Status.PENDING:
         raise ValidationError({"status": f"Only a pending request can be cancelled (this one is {request.get_status_display().lower()})."})
 
+    client.ensure_awake(request.provider_name)       # nothing is changed or sent unless the partner answers
     result = client.cancel_request(request.provider_name, request.request_uuid)   # ProviderError propagates
     if result in ("cancelled", "not_found"):
         with transaction.atomic():
@@ -190,7 +205,7 @@ def cancel_purchase_request(*, request_id: int) -> PurchaseRequest:
         return locked
 
     # The partner decided first: pick up its decision and refuse the cancel clearly.
-    sync_requests([request])
+    sync_requests([request], checked=True)
     raise ValidationError({"status": "The partner has already decided this request, so it can no longer be cancelled."})
 
 
@@ -359,7 +374,7 @@ def _apply_decision(request: PurchaseRequest, decision: dict) -> bool:
         return True
 
 
-def sync_requests(requests) -> int:
+def sync_requests(requests, *, checked: bool = False) -> int:
     """
     Learns the partner's decision for the given requests and imports accepted
     ones. Returns how many requests changed state or were imported. Raises
@@ -369,6 +384,11 @@ def sync_requests(requests) -> int:
     by_provider = {}
     for request in requests:
         by_provider.setdefault(request.provider_name, []).append(request)
+
+    if not checked:
+        # Fail-safe default: EVERY partner must answer before ANY of them is processed (no half-done runs).
+        for provider in by_provider:
+            client.ensure_awake(provider)
 
     for provider, group in by_provider.items():
         asking = [r for r in group if r.status == Status.PENDING]
@@ -388,14 +408,18 @@ def sync_requests(requests) -> int:
 
 
 def process_doorbell(*, provider: str, request_uuid) -> bool:
-    """The partner says one of our requests was decided: fetch it and act. Never raises."""
+    """
+    The partner says one of our requests was decided: fetch that decision and act. Never raises.
+    No readiness check first: the partner has just called US, which proves it is awake, and the
+    one decision we ask it for is something we actually need.
+    """
     request = PurchaseRequest.objects.filter(provider_name=provider, request_uuid=request_uuid).first()
     if request is None:
         return False
     try:
-        sync_requests([request])
+        sync_requests([request], checked=True)
     except client.ProviderError:
-        logger.warning("b2b doorbell for %s: could not reach the partner; catch-up will retry.", request_uuid)
+        logger.warning("b2b doorbell for %s: partner not reachable; catch-up will retry.", request_uuid)
         return False
     except Exception as exc:  # noqa: BLE001 — a doorbell must always get a quick, plain answer
         logger.warning("b2b doorbell for %s failed: %s", request_uuid, type(exc).__name__)
@@ -406,72 +430,154 @@ def process_doorbell(*, provider: str, request_uuid) -> bool:
 # ---------------------------------------------------------------------------
 # Catch-up
 # ---------------------------------------------------------------------------
+#
+# Rule: do not contact a partner until we need it. Catch-up therefore contacts a partner ONLY for:
+#   * a request that never reached it (saved here, not delivered) — it has to be sent;
+#   * a request still awaiting a decision after STALE_PENDING_AFTER — its doorbell should have
+#     arrived by now, so ask (at most once per PENDING_RECHECK_INTERVAL);
+#   * every request awaiting a decision, when the user presses "Check for Updates" (force).
+# Importing an accepted request needs nothing from the partner (its decision is already stored
+# here), so that never causes a partner call.
+
+STALE_PENDING_AFTER = timedelta(minutes=10)
+PENDING_RECHECK_INTERVAL = timedelta(minutes=15)
+UNSENT_RETRY_INTERVAL = timedelta(seconds=config.SYNC_MIN_INTERVAL_SECONDS)
+LOCAL_IMPORTS_PER_RUN = 10          # each import is dozens of queries; the rest wait for the next dashboard load
+
+# SyncState rows used as throttle markers (one clock per kind of partner contact).
+MARKER_UNSENT = 1                    # last time catch-up contacted a partner to SEND an undelivered request
+MARKER_STALE_ASK = 2                 # last time catch-up contacted a partner to ASK about a stale request
+
 
 def _undecided_requests():
     return PurchaseRequest.objects.filter(Q(status=Status.PENDING) | Q(status=Status.ACCEPTED, order__isnull=True))
 
 
-def _claim_check_slot(*, force: bool) -> bool:
+def _claim_check_slot(*, key: int, force: bool, min_interval) -> bool:
     """
-    Takes the right to ask the partner now, with one conditional UPDATE (so two
-    concurrent catch-ups can't both pass): allowed when never checked or the last
-    check is older than a minute — or always when `force`.
+    Takes the right to contact a partner for one kind of reason, with ONE conditional UPDATE (so two
+    concurrent catch-ups can't both pass): allowed when that marker was never stamped or is older
+    than `min_interval` — or always when `force`.
     """
-    SyncState.get()   # make sure the single row exists
     now = timezone.now()
-    cutoff = now - timedelta(seconds=config.SYNC_MIN_INTERVAL_SECONDS)
-    slot = SyncState.objects.filter(pk=1)
+    slot = SyncState.objects.filter(pk=key)
     if not force:
-        slot = slot.filter(Q(last_checked_at__isnull=True) | Q(last_checked_at__lt=cutoff))
-    return slot.update(last_checked_at=now) == 1
+        slot = slot.filter(Q(last_checked_at__isnull=True) | Q(last_checked_at__lt=now - min_interval))
+    if slot.update(last_checked_at=now) == 1:
+        return True
+    if SyncState.objects.filter(pk=key).exists():
+        return False                       # the marker exists and is not due yet
+    try:
+        SyncState.objects.create(pk=key, last_checked_at=now)    # very first use of this marker
+        return True
+    except IntegrityError:
+        return False                       # someone else just created it (and so just claimed it)
+
+
+def _import_accepted_locally(*, force: bool) -> int:
+    """
+    Creates the order for accepted requests whose import never ran. Purely local — no partner call.
+    Ones that already failed once (import_error set) are retried only on `force` ("Check for
+    Updates" / "Try Again"), so a permanent failure can't be re-run on every dashboard load.
+    """
+    stuck = PurchaseRequest.objects.filter(status=Status.ACCEPTED, order__isnull=True)
+    if not force:
+        stuck = stuck.filter(import_error="")
+    done = 0
+    for request in stuck.order_by("created_at", "id")[:LOCAL_IMPORTS_PER_RUN]:
+        if import_accepted(request.pk):
+            done += 1
+    return done
+
+
+def run_catch_up_report(*, force: bool = False):
+    """
+    Returns (processed, partner_asleep). Never raises.
+
+    ONE aggregate query tells what (if anything) needs doing, so an idle dashboard load — or one
+    with only fresh pending requests — costs a single query. Local work (importing accepted
+    requests) never touches a partner. A partner is contacted only when something here truly
+    needs it (see the rule above); it must then answer a wake-up check first — if it does not,
+    that partner's requests are left exactly as they are. Each reason for contacting a partner
+    has its own throttle clock (60s to SEND an undelivered request, 15 min to ASK about a stale one).
+    """
+    if not config.consumer_enabled():
+        return 0, False
+
+    now = timezone.now()
+    stale_cutoff = now - STALE_PENDING_AFTER
+    counts = _undecided_requests().aggregate(
+        local=Count("pk", filter=Q(status=Status.ACCEPTED, order__isnull=True, **({} if force else {"import_error": ""}))),
+        unsent=Count("pk", filter=Q(status=Status.PENDING, sent_at__isnull=True)),
+        ask=Count("pk", filter=Q(status=Status.PENDING, sent_at__isnull=False, **({} if force else {"sent_at__lt": stale_cutoff}))),
+    )
+    if not any(counts.values()):
+        return 0, False
+
+    processed = _import_accepted_locally(force=force) if counts["local"] else 0
+
+    send_due = bool(counts["unsent"]) and _claim_check_slot(key=MARKER_UNSENT, force=force, min_interval=UNSENT_RETRY_INTERVAL)
+    ask_due = bool(counts["ask"]) and _claim_check_slot(key=MARKER_STALE_ASK, force=force, min_interval=PENDING_RECHECK_INTERVAL)
+    if not (send_due or ask_due):
+        return processed, False
+
+    pending = PurchaseRequest.objects.filter(status=Status.PENDING)
+    reasons = Q(pk__in=[])
+    if send_due:
+        reasons |= Q(sent_at__isnull=True)
+    if ask_due:
+        reasons |= Q(sent_at__isnull=False) if force else Q(sent_at__lt=stale_cutoff)
+    candidates = pending.filter(reasons)
+
+    awake = {}
+
+    def partner_awake(provider):
+        if provider not in awake:
+            awake[provider] = client.wake_status(provider)
+        return awake[provider] == "awake"
+
+    cursor = None   # (created_at, id) of the last row of the previous chunk
+    for _ in range(CATCH_UP_MAX_CHUNKS):
+        chunk = candidates.order_by("created_at", "id")
+        if cursor is not None:
+            chunk = chunk.filter(Q(created_at__gt=cursor[0]) | Q(created_at=cursor[0], id__gt=cursor[1]))
+        raw = list(chunk[:CATCH_UP_CHUNK])
+        if not raw:
+            break
+        cursor = (raw[-1].created_at, raw[-1].id)
+
+        by_provider = {}
+        for request in raw:
+            by_provider.setdefault(request.provider_name, []).append(request)
+        for provider, group in by_provider.items():
+            if not partner_awake(provider):
+                continue                      # asleep partner => do nothing for its requests
+            to_ask = [r for r in group if r.sent_at is not None]       # already delivered: ask for its decision
+            try:
+                for request in group:
+                    if request.sent_at is not None:
+                        continue
+                    # Re-check right before sending: the user may have cancelled it a moment ago.
+                    request.refresh_from_db(fields=["status", "sent_at"])
+                    if request.status != Status.PENDING or request.sent_at is not None:
+                        continue
+                    try:
+                        _send(request)
+                        processed += 1
+                    except client.ProviderUnreachable:
+                        raise            # this partner went down mid-run: stop wasting time on it
+                    except client.ProviderError:
+                        continue         # this one was refused; the others may still go through
+                if to_ask:
+                    processed += sync_requests(to_ask, checked=True)
+            except client.ProviderError:
+                logger.warning("b2b catch-up: partner %r not reachable right now.", provider)
+            except Exception as exc:  # noqa: BLE001 — catch-up must never take a user request down
+                logger.warning("b2b catch-up for %r failed: %s", provider, type(exc).__name__)
+        if len(raw) < CATCH_UP_CHUNK:
+            break                             # that was the last chunk
+    return processed, any(value == "asleep" for value in awake.values())
 
 
 def run_catch_up(*, force: bool = False) -> int:
-    """
-    O(1) when nothing is outstanding (one indexed existence check). When something
-    is, the partner is asked at most once a minute (marker on SyncState), unless
-    `force` (the user pressed "check for updates"). Re-sends undelivered requests,
-    learns pending decisions, and retries accepted-but-not-imported ones, in bounded
-    chunks. Never raises: a partner that is offline simply means "try again next time".
-    """
-    if not config.consumer_enabled():
-        return 0
-    if not _undecided_requests().exists():
-        return 0
-    if not _claim_check_slot(force=force):
-        return 0
-
-    processed = 0
-    cursor = None   # (created_at, id) of the last row of the previous chunk
-    for _ in range(CATCH_UP_MAX_CHUNKS):
-        outstanding = _undecided_requests().order_by("created_at", "id")
-        if cursor is not None:
-            outstanding = outstanding.filter(Q(created_at__gt=cursor[0]) | Q(created_at=cursor[0], id__gt=cursor[1]))
-        batch = list(outstanding[:CATCH_UP_CHUNK])
-        if not batch:
-            break
-        cursor = (batch[-1].created_at, batch[-1].id)
-
-        try:
-            for request in batch:
-                if request.sent_at is not None or request.status != Status.PENDING:
-                    continue
-                # Re-check right before sending: the user may have cancelled it a moment ago.
-                request.refresh_from_db(fields=["status", "sent_at"])
-                if request.status != Status.PENDING or request.sent_at is not None:
-                    continue
-                try:
-                    _send(request)
-                    processed += 1
-                except client.ProviderUnreachable:
-                    raise            # the partner is down: stop wasting time on the rest
-                except client.ProviderError:
-                    continue         # this one was refused; the others may still go through
-            processed += sync_requests(batch)
-        except client.ProviderError:
-            logger.warning("b2b catch-up: partner not reachable right now.")
-            break
-        except Exception as exc:  # noqa: BLE001 — catch-up must never take a user request down
-            logger.warning("b2b catch-up failed: %s", type(exc).__name__)
-            break
-    return processed
+    return run_catch_up_report(force=force)[0]

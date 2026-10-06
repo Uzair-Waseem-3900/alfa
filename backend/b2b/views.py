@@ -15,7 +15,13 @@ NOT_CONFIGURED_MESSAGE = (
     "The partner did not accept this connection. Check that the shared secret, "
     "this software's company name and the partner's address match on both sides."
 )
-UNREACHABLE_MESSAGE = "The partner software could not be reached right now. Please try again."
+UNREACHABLE_MESSAGE = (
+    "The partner software could not be reached right now. Use the Wake up button, wait until it answers, and try again."
+)
+NOT_AWAKE_MESSAGE = (
+    "The partner software is not awake right now, so nothing was changed. "
+    "Press \"Wake up\", wait until it answers, and try again."
+)
 
 
 class ConsumerOnlyMixin:
@@ -45,6 +51,8 @@ def _positive_int(raw, default, maximum=None):
 
 def _partner_failure(exc: client.ProviderError) -> Response:
     """Maps a client failure to a UI-safe response (never echoes provider details)."""
+    if isinstance(exc, client.PartnerNotAwake):
+        return Response({"code": "partner_not_awake", "detail": NOT_AWAKE_MESSAGE}, status=http.HTTP_409_CONFLICT)
     if isinstance(exc, (client.ProviderNotConfigured, client.ProviderRejected)):
         return Response({"status": "not_configured", "detail": NOT_CONFIGURED_MESSAGE})
     return Response({"detail": UNREACHABLE_MESSAGE}, status=http.HTTP_503_SERVICE_UNAVAILABLE)
@@ -93,6 +101,26 @@ class ProviderRequestView(ConsumerOnlyMixin, APIView):
     def post(self, request, provider):
         _known_provider(provider)
         try:
+            client.ensure_awake(provider)        # nothing is sent unless the partner answers
             return Response(client.request_access(provider))
         except client.ProviderError as exc:
             return _partner_failure(exc)
+
+
+class ProviderWakeView(ConsumerOnlyMixin, APIView):
+    """
+    POST /b2b/providers/<provider>/wake/ — the admin pressed "Wake up". One readiness check
+    (5s limit) of that partner's backend. The browser repeats it every few seconds, for at
+    most 90 seconds, until it answers; nothing here changes any data.
+    """
+    permission_classes = [IsAdminOrSuperuser]
+
+    def post(self, request, provider):
+        _known_provider(provider)
+        status = client.wake_status(provider)
+        if status == "awake":
+            return Response({"awake": True})
+        return Response({
+            "awake": False, "reason": status,
+            "detail": NOT_CONFIGURED_MESSAGE if status == "not_configured" else None,
+        })

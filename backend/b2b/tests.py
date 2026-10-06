@@ -288,7 +288,8 @@ class RateListProxyTests(B2BConsumerTestBase):
 
 class RequestAccessTests(B2BConsumerTestBase):
     def test_request_posts_signed_empty_body_and_returns_status(self):
-        with patch.object(b2b_client, "_open", return_value=FakeResponse({"status": "pending"})) as opened:
+        # A fresh response per call: the readiness check and the real request each read their own body.
+        with patch.object(b2b_client, "_open", side_effect=lambda req, timeout: FakeResponse({"status": "pending"})) as opened:
             response = self.admin_client.post(REQUEST_URL)
         self.assertEqual(response.json(), {"status": "pending"})
         req = opened.call_args.args[0]
@@ -306,7 +307,9 @@ class RequestAccessTests(B2BConsumerTestBase):
         with patch.object(b2b_client, "_open", side_effect=not_found):
             self.assertEqual(self.admin_client.post(REQUEST_URL).json()["status"], "not_configured")
         with patch.object(b2b_client, "_open", side_effect=error.URLError("down")):
-            self.assertEqual(self.admin_client.post(REQUEST_URL).status_code, 503)
+            response = self.admin_client.post(REQUEST_URL)       # the wake-up check fails first: 409, nothing sent
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "partner_not_awake")
 
 
 class NoRedirectTests(SimpleTestCase):

@@ -1,5 +1,6 @@
 import uuid as uuidlib
 
+from django.db import connection
 from rest_framework import generics, status as http
 from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
@@ -13,11 +14,11 @@ from .request_serializers import (
     CreateRequestSerializer, PurchaseRequestDetailSerializer, PurchaseRequestListSerializer,
 )
 from .request_services import (
-    cancel_purchase_request, create_purchase_request, process_doorbell, run_catch_up, same_text,
+    cancel_purchase_request, create_purchase_request, process_doorbell, run_catch_up_report, same_text,
 )
 from .views import (
     DEFAULT_PAGE_SIZE, MAX_PAGE, MAX_PAGE_SIZE, MAX_SEARCH_LENGTH, NOT_CONFIGURED_MESSAGE,
-    UNREACHABLE_MESSAGE, ConsumerOnlyMixin, _known_provider, _positive_int,
+    NOT_AWAKE_MESSAGE, UNREACHABLE_MESSAGE, ConsumerOnlyMixin, _known_provider, _positive_int,
 )
 
 
@@ -32,6 +33,8 @@ def _flatten(errors):
 
 def _failure(exc: client.ProviderError) -> Response:
     """Maps a client failure to a UI-safe response (never echoes provider internals)."""
+    if isinstance(exc, client.PartnerNotAwake):
+        return Response({"code": "partner_not_awake", "detail": NOT_AWAKE_MESSAGE}, status=http.HTTP_409_CONFLICT)
     if isinstance(exc, client.ProviderInvalid):
         messages = [m[:300] for m in _flatten(exc.errors)[:20]]      # bounded: never relay an unbounded body
         return Response({"items": messages or ["The partner rejected the request."]},
@@ -134,7 +137,8 @@ class PurchaseRequestSyncView(ConsumerOnlyMixin, APIView):
     permission_classes = [IsAdminOrSuperuser]
 
     def post(self, request):
-        return Response({"updated": run_catch_up(force=True)})
+        updated, partner_asleep = run_catch_up_report(force=True)
+        return Response({"updated": updated, "partner_asleep": partner_asleep})
 
 
 class PartnerDecidedView(APIView):
@@ -155,4 +159,22 @@ class PartnerDecidedView(APIView):
         except ValueError:
             return Response({"ok": False}, status=http.HTTP_400_BAD_REQUEST)
         process_doorbell(provider=request.user.partner_name, request_uuid=request_uuid)
+        return Response({"ok": True})
+
+
+class PartnerPingView(APIView):
+    """
+    GET /b2b/partner/ping/ — signed readiness check, used ONLY by a partner's backend (never a
+    browser) right before it changes anything that depends on this software. 200 means:
+    the app is up, the database answers, and the caller's credentials are valid.
+    """
+    authentication_classes = [SignedPartnerAuthentication]
+    permission_classes = [IsSignedPartner]
+
+    def get(self, request):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+        except Exception:  # noqa: BLE001 — a broken database means "not ready"
+            return Response({"ok": False}, status=http.HTTP_503_SERVICE_UNAVAILABLE)
         return Response({"ok": True})

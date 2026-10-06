@@ -17,6 +17,7 @@ import EmptyState from '../../components/ui/EmptyState';
 import InlineAlert from '../../components/ui/InlineAlert';
 import SearchableSelect from '../../components/ui/SearchableSelect';
 import ShelfAllocationEditor from '../../components/shared/ShelfAllocationEditor';
+import WakePartnerButton from '../../components/b2b/WakePartnerButton';
 
 const fmt = (value) => {
     const num = typeof value === 'string' ? parseFloat(value) : Number(value);
@@ -191,6 +192,11 @@ const CreatePurchaseRequestPage = () => {
                         <p className="text-sm text-neutral-500 mb-4">
                             Search by name or code. Rates are shown only if {provider} shares its rate list with you.
                         </p>
+                        <WakePartnerButton
+                            className="mb-4"
+                            partnerLabel={provider}
+                            wake={() => b2bApi.providers.wake(provider)}
+                        />
                         <SearchableSelect
                             value=""
                             onChange={addProduct}

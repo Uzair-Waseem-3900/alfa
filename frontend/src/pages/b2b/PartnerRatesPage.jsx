@@ -15,6 +15,8 @@ import SearchBar from '../../components/ui/SearchBar';
 import Pagination from '../../components/ui/Pagination';
 import EmptyState from '../../components/ui/EmptyState';
 import InlineAlert from '../../components/ui/InlineAlert';
+import WakePartnerButton from '../../components/b2b/WakePartnerButton';
+import { b2bApi } from '../../services/b2bApi';
 
 const fmt = (value) => {
     const num = typeof value === 'string' ? parseFloat(value) : Number(value);
@@ -169,6 +171,14 @@ const PartnerRatesPage = () => {
                     activeTab={provider}
                     onChange={handleProviderChange}
                     className="overflow-x-auto"
+                />
+            )}
+
+            {provider && (
+                <WakePartnerButton
+                    partnerLabel={provider}
+                    wake={() => b2bApi.providers.wake(provider)}
+                    onAwake={refetch}
                 />
             )}
 

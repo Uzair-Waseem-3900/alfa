@@ -54,9 +54,10 @@ class TriggerAllCatchUpsView(APIView):
         5. credit_score — overdue-invoice credit score catch-up, one entry
                           per customer with a newly-overdue invoice
         6. users       — expired JWT token flush (throttled to once/24h)
-        7. b2b         — purchase requests sent to a partner software: re-send,
-                          fetch decisions, import accepted ones (gated by an
-                          indexed existence check + a one-minute marker)
+        7. b2b         — purchase requests sent to a partner software: imports
+                          accepted ones (local, no partner call) and contacts a
+                          partner ONLY to re-send an undelivered request or to ask
+                          about one still undecided after 10 minutes (missed doorbell)
 
     Order matters: assets and investors run first because profits reads
     both of their outputs (asset depreciation for the deduction breakdown,
@@ -167,11 +168,11 @@ class TriggerAllCatchUpsView(APIView):
             return 0, str(exc)
 
     def _run_b2b_catchup(self):
-        """Purchase requests made to a partner software: re-sends any that never
-        reached it, learns the partner's decisions, and creates the confirmed
-        purchase order for accepted ones. One indexed existence check when
-        nothing is outstanding; otherwise the partner is asked at most once a
-        minute. Independent of every other phase (it only touches purchases)."""
+        """Purchase requests made to a partner software: creates the confirmed
+        purchase order for accepted ones (local, no partner call) and contacts
+        a partner only when something truly needs it (an undelivered request to
+        re-send, or one undecided for 10+ minutes). One indexed existence check
+        when nothing is outstanding. Independent of every other phase."""
         try:
             from b2b.request_services import run_catch_up
 

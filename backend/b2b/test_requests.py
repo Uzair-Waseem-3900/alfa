@@ -1,5 +1,6 @@
 import io
 import json
+from datetime import timedelta
 import time
 import uuid
 from decimal import Decimal
@@ -22,7 +23,7 @@ from . import client as b2b_client
 from .models import PurchaseRequest, PurchaseRequestItem, SyncState
 from .request_services import fit_shelves, run_catch_up
 from .signing import compute_signature
-from .tests import CONSUMER_ON, OWN_NAME, PROVIDER, SECRET, FakeResponse, make_user
+from .tests import CONSUMER_ON, OWN_NAME, PROVIDER, REQUEST_URL, SECRET, FakeResponse, make_user
 
 SUPPLIER_CODE = "APK-SUP"
 DOORBELL_PATH = "/api/b2b/partner/purchase-requests/decided/"
@@ -41,6 +42,11 @@ class FakePartner:
         self.search_rows = []
         self.rates_allowed = False
         self.fail = None               # exception raised for every call (offline partner)
+        self.asleep = False            # only the readiness check fails (partner "sleeping")
+        self.refuses = False           # readiness answers 404 (wrong secret / name)
+        self.asleep_hosts = set()      # hosts whose readiness check fails (a second partner that sleeps)
+        self.error_hosts = set()       # hosts whose submit fails after a successful readiness check
+        self.refuse_code = 404
 
     def __call__(self, req, timeout):
         self.calls.append(req)
@@ -48,6 +54,12 @@ class FakePartner:
             raise self.fail
         split = parse.urlsplit(req.full_url)
         path, method = split.path, req.get_method()
+        if path.endswith("/ping/"):
+            if self.asleep or split.netloc in self.asleep_hosts:
+                raise error.URLError("still waking up")
+            if self.refuses:
+                raise error.HTTPError(req.full_url, self.refuse_code, "Refused", {}, None)
+            return FakeResponse({"ok": True})
         if path.endswith("/products/"):
             return FakeResponse({
                 "rates_allowed": self.rates_allowed, "count": len(self.search_rows), "total_pages": 1,
@@ -62,11 +74,17 @@ class FakePartner:
         if path.endswith("/purchase-requests/") and method == "POST":
             if self.submit_error is not None:
                 raise self.submit_error
+            if split.netloc in self.error_hosts:
+                raise error.URLError("dropped mid-send")
             return FakeResponse({"request_uuid": "x", "status": self.submit_status})
         raise AssertionError(f"unexpected call {method} {path}")
 
     def bodies(self):
         return [json.loads(c.data) for c in self.calls if c.data]
+
+    def real_calls(self):
+        """Every call except the readiness checks."""
+        return [c for c in self.calls if not parse.urlsplit(c.full_url).path.endswith("/ping/")]
 
 
 def accepted(*lines):
@@ -199,8 +217,8 @@ class CreateTests(RequestBase):
         self.assertEqual(PurchaseRequest.objects.count(), 0)
         self.assertEqual(PurchaseRequestItem.objects.count(), 0)
 
-    def test_unreachable_partner_keeps_the_request_unsent_and_catch_up_delivers_it(self):
-        self.partner.fail = error.URLError("down")
+    def test_a_send_that_fails_after_a_successful_wake_check_stays_saved_and_catch_up_delivers_it(self):
+        self.partner.submit_error = error.URLError("dropped mid-send")     # the readiness check passes, the send does not
         response = self.api.post(LIST_URL, self.body(), format="json")
         self.assertEqual(response.status_code, 201)
         self.assertIn("saved", response.json()["notice"])
@@ -208,7 +226,7 @@ class CreateTests(RequestBase):
         self.assertIsNone(request.sent_at)
         self.assertFalse(response.json()["delivered"])
 
-        self.partner.fail = None
+        self.partner.submit_error = None
         self.assertGreaterEqual(run_catch_up(force=True), 1)
         request.refresh_from_db()
         self.assertIsNotNone(request.sent_at)
@@ -238,7 +256,7 @@ class CancelTests(RequestBase):
     def test_unreachable_partner_leaves_it_pending_and_only_pending_can_cancel(self):
         request = self.make_request()
         self.partner.fail = error.URLError("down")
-        self.assertEqual(self.api.post(f"{LIST_URL}{request.id}/cancel/").status_code, 503)
+        self.assertEqual(self.api.post(f"{LIST_URL}{request.id}/cancel/").status_code, 409)
         request.refresh_from_db()
         self.assertEqual(request.status, "pending")
         self.partner.fail = None
@@ -392,18 +410,52 @@ class CatchUpTests(RequestBase):
             self.assertEqual(run_catch_up(), 0)
         self.assertEqual(self.partner.calls, [])
 
-    def test_the_partner_is_asked_at_most_once_a_minute_unless_forced(self):
+    def age(self, request, minutes):
+        PurchaseRequest.objects.filter(pk=request.pk).update(sent_at=timezone.now() - timedelta(minutes=minutes))
+
+    def test_a_fresh_pending_request_is_never_asked_about_unless_the_user_forces_it(self):
+        request = self.make_request()                                # delivered a moment ago; the doorbell will tell us
+        self.partner.decisions[str(request.request_uuid)] = {"status": "pending", "items": []}
+        self.partner.calls.clear()
+        self.assertEqual(run_catch_up(), 0)
+        self.assertEqual(self.partner.calls, [])                     # no readiness check, nothing: we don't need the partner
+        run_catch_up(force=True)                                     # "Check for Updates"
+        self.assertTrue(any(c.full_url.split("?")[0].endswith("/decisions/") for c in self.partner.calls))
+
+    def test_a_request_undecided_for_over_ten_minutes_is_asked_about_at_most_every_fifteen(self):
         request = self.make_request()
         self.partner.decisions[str(request.request_uuid)] = {"status": "pending", "items": []}
-        calls_before = len(self.partner.calls)
+        self.age(request, 11)                                        # its doorbell should have arrived by now
+        self.partner.calls.clear()
         run_catch_up()
-        after_first = len(self.partner.calls)
+        first_run = len(self.partner.calls)
+        self.assertGreaterEqual(first_run, 2)                        # readiness check + the decision lookup
         run_catch_up()
-        self.assertEqual(len(self.partner.calls), after_first)       # gated
-        self.assertGreater(after_first, calls_before)
-        run_catch_up(force=True)
-        self.assertGreater(len(self.partner.calls), after_first)     # forced
-        self.assertIsNotNone(SyncState.get().last_checked_at)
+        self.assertEqual(len(self.partner.calls), first_run)         # not again inside the 15 minutes
+        SyncState.objects.update(last_checked_at=timezone.now() - timedelta(minutes=16))
+        run_catch_up()
+        self.assertGreater(len(self.partner.calls), first_run)       # 15 minutes later: once more
+        self.assertIsNotNone(SyncState.objects.get(pk=2).last_checked_at)   # the "ask about a stale request" clock
+
+    def test_importing_an_accepted_request_never_calls_the_partner(self):
+        request = self.make_request()
+        # The decision is already stored here (e.g. the process stopped before the import ran).
+        PurchaseRequest.objects.filter(pk=request.pk).update(status="accepted", decided_at=timezone.now())
+        PurchaseRequestItem.objects.filter(request=request).update(accepted_quantity=5, unit_price=Decimal("90"))
+        self.partner.calls.clear()
+        self.assertEqual(run_catch_up(), 1)
+        request.refresh_from_db()
+        self.assertTrue(request.order_id)
+        self.assertEqual(self.partner.calls, [])                     # purely local: no readiness check, no call
+
+    def test_a_failed_import_is_retried_only_on_force_not_on_every_catch_up(self):
+        request = self.make_request()
+        PurchaseRequest.objects.filter(pk=request.pk).update(
+            status="accepted", decided_at=timezone.now(), import_error="supplier missing",
+        )
+        PurchaseRequestItem.objects.filter(request=request).update(accepted_quantity=5, unit_price=Decimal("90"))
+        self.assertEqual(run_catch_up(), 0)                          # known failure: not re-run on every dashboard load
+        self.assertEqual(run_catch_up(force=True), 1)                # "Check for Updates" / "Try Again" retries it
 
     def test_an_offline_partner_is_not_an_error(self):
         self.make_request()
@@ -417,6 +469,7 @@ class CatchUpTests(RequestBase):
 
     def test_the_system_catch_up_endpoint_reports_the_b2b_phase(self):
         request = self.make_request()
+        self.age(request, 11)                                        # long enough that a missed doorbell is suspected
         self.partner.decisions[str(request.request_uuid)] = accepted(("PEN-1", 5, "90.0000", "18.00", "1.00"))
         SyncState.objects.all().delete()
         response = self.api.get("/api/system/catch-up/")
@@ -542,12 +595,13 @@ class AuditHardeningTests(RequestBase):
         self.assertEqual(request.order.net_payable, expected["line_total"])
 
     def test_catch_up_stops_at_the_first_dead_partner_call(self):
-        self.partner.fail = error.URLError("down")
+        self.partner.submit_error = error.URLError("dropped mid-send")
         for _ in range(3):
-            self.api.post(LIST_URL, self.body(), format="json")               # three unsent requests
-        attempts_before = len(self.partner.calls)
+            self.api.post(LIST_URL, self.body(), format="json")               # three saved-but-unsent requests
+        sends_before = len([c for c in self.partner.real_calls() if c.get_method() == "POST"])
         run_catch_up(force=True)
-        self.assertEqual(len(self.partner.calls) - attempts_before, 1)        # one failed send, then it gave up
+        sends_after = len([c for c in self.partner.real_calls() if c.get_method() == "POST"])
+        self.assertEqual(sends_after - sends_before, 1)                       # one failed send, then it gave up
 
     def test_catch_up_asks_in_bounded_chunks(self):
         now = timezone.now()
@@ -563,11 +617,263 @@ class AuditHardeningTests(RequestBase):
         self.assertIn("b2b_my_req_outstanding_idx", names)
 
     def test_a_cancel_between_catch_up_loading_and_sending_is_respected(self):
-        self.partner.fail = error.URLError("down")
+        self.partner.submit_error = error.URLError("dropped mid-send")
         self.api.post(LIST_URL, self.body(), format="json")
         request = PurchaseRequest.objects.get()
-        self.partner.fail = None
+        self.partner.submit_error = None
         PurchaseRequest.objects.filter(pk=request.pk).update(status="cancelled")      # cancelled just now
         submits_before = len([c for c in self.partner.calls if c.get_method() == "POST"])
         run_catch_up(force=True)
         self.assertEqual(len([c for c in self.partner.calls if c.get_method() == "POST"]), submits_before)
+
+
+WRITE_VERBS = ("INSERT", "UPDATE", "DELETE")
+
+
+def writes(ctx):
+    return [q["sql"][:90] for q in ctx.captured_queries if q["sql"].lstrip().upper().startswith(WRITE_VERBS)]
+
+
+class WakeGateTests(RequestBase):
+    """A partner that does not answer its readiness check: nothing is written here, nothing else is sent."""
+
+    def only_readiness_checks_were_made(self):
+        self.assertEqual(self.partner.real_calls(), [])
+        self.assertGreaterEqual(len(self.partner.calls), 1)       # it DID try the wake-up check
+
+    def test_create_with_a_sleeping_partner_saves_nothing_and_sends_nothing(self):
+        self.partner.asleep = True
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.api.post(LIST_URL, self.body(), format="json")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "partner_not_awake")
+        self.assertIn("nothing was changed", response.json()["detail"])
+        self.assertEqual(PurchaseRequest.objects.count(), 0)
+        self.assertEqual(PurchaseRequestItem.objects.count(), 0)
+        self.assertEqual(writes(ctx), [])
+        self.only_readiness_checks_were_made()
+
+    def test_cancel_with_a_sleeping_partner_changes_nothing(self):
+        request = self.make_request()
+        self.partner.asleep = True
+        self.partner.calls.clear()
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.api.post(f"{LIST_URL}{request.id}/cancel/")
+        self.assertEqual(response.status_code, 409)
+        request.refresh_from_db()
+        self.assertEqual(request.status, "pending")
+        self.assertEqual(writes(ctx), [])
+        self.only_readiness_checks_were_made()
+
+    def test_asking_for_rate_list_access_needs_the_partner_awake(self):
+        self.partner.asleep = True
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.api.post(REQUEST_URL)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(writes(ctx), [])
+        self.only_readiness_checks_were_made()
+
+    def test_catch_up_and_the_sync_button_do_nothing_when_the_partner_sleeps(self):
+        request = self.make_request()
+        PurchaseRequest.objects.filter(pk=request.pk).update(sent_at=None)      # an unsent one
+        self.partner.asleep = True
+        self.partner.calls.clear()
+        self.assertEqual(run_catch_up(force=True), 0)
+        body = self.api.post(f"{LIST_URL}sync/").json()
+        self.assertEqual((body["updated"], body["partner_asleep"]), (0, True))
+        request.refresh_from_db()
+        self.assertIsNone(request.sent_at)
+        self.only_readiness_checks_were_made()
+
+    def test_the_doorbell_asks_only_for_the_one_decision_with_no_readiness_check_back(self):
+        request = self.make_request()
+        self.partner.decisions[str(request.request_uuid)] = accepted(("PEN-1", 5, "90.0000", "18.00", "1.00"))
+        self.partner.calls.clear()
+        self.assertEqual(self.ring(request.request_uuid).status_code, 200)
+        paths = [c.full_url.split("?")[0].rsplit("/", 2)[-2] for c in self.partner.calls]
+        self.assertEqual(paths, ["decisions"])                       # the partner just rang us: it is obviously awake
+        request.refresh_from_db()
+        self.assertTrue(request.order_id)
+
+    def test_the_doorbell_changes_nothing_if_the_decision_cannot_be_fetched(self):
+        request = self.make_request()
+        self.partner.fail = error.URLError("went down right after ringing")
+        self.assertEqual(self.ring(request.request_uuid).status_code, 200)
+        request.refresh_from_db()
+        self.assertEqual((request.status, request.order_id), ("pending", None))
+        self.assertEqual(PurchaseOrder.objects.count(), 0)
+
+    def test_a_partner_that_refuses_us_is_reported_as_not_configured_and_nothing_is_saved(self):
+        self.partner.refuses = True
+        response = self.api.post(LIST_URL, self.body(), format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("did not accept this connection", str(response.json()))
+        self.assertEqual(PurchaseRequest.objects.count(), 0)
+        self.only_readiness_checks_were_made()
+
+    def test_every_changing_operation_checks_first_and_goes_ahead_when_awake(self):
+        request = self.make_request()                                          # create: check -> save -> send
+        kinds = [(c.get_method(), parse.urlsplit(c.full_url).path.rsplit("/", 2)[-2]) for c in self.partner.calls]
+        self.assertEqual(kinds[0], ("GET", "ping"))                           # the check is the FIRST thing sent
+        self.partner.calls.clear()
+        self.api.post(f"{LIST_URL}{request.id}/cancel/")                       # cancel: check -> cancel
+        kinds = [(c.get_method(), parse.urlsplit(c.full_url).path.rsplit("/", 2)[-2]) for c in self.partner.calls]
+        self.assertEqual(kinds[0], ("GET", "ping"))
+        self.assertEqual(kinds[1][0], "POST")
+
+    def test_the_wake_endpoint_reports_awake_asleep_and_not_configured(self):
+        url = f"/api/b2b/providers/{PROVIDER}/wake/"
+        self.assertEqual(self.api.post(url).json(), {"awake": True})
+        self.partner.asleep = True
+        self.assertEqual(self.api.post(url).json(), {"awake": False, "reason": "asleep", "detail": None})
+        self.partner.asleep, self.partner.refuses = False, True
+        body = self.api.post(url).json()
+        self.assertEqual((body["awake"], body["reason"]), (False, "not_configured"))
+        self.assertIn("did not accept", body["detail"])
+        self.assertEqual(self.api.post("/api/b2b/providers/NOPE/wake/").status_code, 404)
+        normal = APIClient()
+        normal.force_authenticate(make_user("normal@example.com", is_staff=False))
+        self.assertEqual(normal.post(url).status_code, 403)
+        self.assertEqual(len(PurchaseRequest.objects.all()), 0)               # waking changes no data
+
+
+class ReadinessEndpointTests(RequestBase):
+    PING = "/api/b2b/partner/ping/"
+
+    def signed_ping(self, secret=SECRET, client=PROVIDER):
+        ts = int(time.time())
+        sig = compute_signature(secret, timestamp=ts, method="GET", path=self.PING, query="", body=b"")
+        return APIClient().get(
+            self.PING, HTTP_X_B2B_CLIENT=client, HTTP_X_B2B_TIMESTAMP=str(ts), HTTP_X_B2B_SIGNATURE=sig,
+        )
+
+    def test_only_a_correctly_signed_known_partner_gets_200(self):
+        self.assertEqual(self.signed_ping().json(), {"ok": True})
+        self.assertEqual(APIClient().get(self.PING).status_code, 404)
+        self.assertEqual(self.signed_ping(secret="wrong").status_code, 404)
+        self.assertEqual(self.signed_ping(client="SOMEONE ELSE").status_code, 404)
+
+    def test_a_broken_database_means_not_ready_and_switched_off_is_404(self):
+        with patch("b2b.request_views.connection.cursor", side_effect=Exception("db down")):
+            self.assertEqual(self.signed_ping().status_code, 503)
+        with override_settings(B2B_CONSUMER_ENABLED=False):
+            self.assertEqual(self.signed_ping().status_code, 404)
+
+
+class AuditHardeningWakeTests(RequestBase):
+    def test_a_401_or_403_on_the_readiness_check_also_means_not_configured_not_asleep(self):
+        url = f"/api/b2b/providers/{PROVIDER}/wake/"
+        for code in (401, 403, 404):
+            self.partner.refuses, self.partner.refuse_code = True, code
+            body = self.api.post(url).json()
+            self.assertEqual((body["awake"], body["reason"]), (False, "not_configured"), code)
+
+    def test_asleep_catch_up_writes_only_the_throttle_marker_and_pings_once_per_run(self):
+        now = timezone.now()
+        PurchaseRequest.objects.bulk_create([
+            PurchaseRequest(provider_name=PROVIDER, created_by=self.admin, sent_at=now) for _ in range(105)
+        ])
+        self.partner.asleep = True
+        self.partner.calls.clear()
+        with CaptureQueriesContext(connection) as ctx:
+            run_catch_up(force=True)
+        self.assertEqual(len(self.partner.calls), 1)                 # one ping for the run, not one per chunk
+        self.assertTrue(all("b2b_syncstate" in sql for sql in writes(ctx)), writes(ctx))
+
+    def test_a_non_forced_catch_up_inside_the_minute_does_not_ping_again(self):
+        request = self.make_request()
+        PurchaseRequest.objects.filter(pk=request.pk).update(sent_at=None)      # undelivered: the one thing worth retrying
+        self.partner.asleep = True
+        run_catch_up(force=True)
+        pings_after_first = len(self.partner.calls)
+        run_catch_up()                                               # inside the 60s window
+        self.assertEqual(len(self.partner.calls), pings_after_first)
+
+    def test_the_sync_button_only_says_asleep_when_the_partner_really_is(self):
+        self.make_request()
+        self.partner.refuses = True
+        body = self.api.post(f"{LIST_URL}sync/").json()
+        self.assertEqual(body["partner_asleep"], False)              # refused is not "asleep"
+        self.partner.refuses, self.partner.asleep = False, True
+        self.assertEqual(self.api.post(f"{LIST_URL}sync/").json()["partner_asleep"], True)
+
+
+TWO_PARTNERS = dict(
+    B2B_PARTNER_BASE_URLS='{"%s": "https://alpha.example", "OTHER": "https://other.example"}' % PROVIDER,
+    B2B_PARTNER_SECRETS='{"%s": "%s", "OTHER": "%s"}' % (PROVIDER, SECRET, SECRET),
+)
+
+
+class CatchUpCostAndFairnessTests(RequestBase):
+    def raw_request(self, provider=PROVIDER, *, sent_minutes_ago=None):
+        sent = None if sent_minutes_ago is None else timezone.now() - timedelta(minutes=sent_minutes_ago)
+        return PurchaseRequest.objects.create(provider_name=provider, created_by=self.admin, sent_at=sent)
+
+    def test_idle_fresh_pending_and_failed_imports_each_cost_exactly_one_query(self):
+        with self.assertNumQueries(1):
+            run_catch_up()                                           # idle
+        self.raw_request(sent_minutes_ago=1)                         # fresh pending
+        with self.assertNumQueries(1):
+            run_catch_up()
+        PurchaseRequest.objects.update(status="accepted", import_error="supplier missing")
+        with self.assertNumQueries(1):
+            run_catch_up()                                           # known failure, not retried without force
+
+    def test_nine_minutes_is_not_stale_eleven_is(self):
+        request = self.raw_request(sent_minutes_ago=9)
+        self.partner.calls.clear()
+        run_catch_up()
+        self.assertEqual(self.partner.calls, [])
+        PurchaseRequest.objects.filter(pk=request.pk).update(sent_at=timezone.now() - timedelta(minutes=11))
+        run_catch_up()
+        self.assertTrue(any(c.full_url.split("?")[0].endswith("/decisions/") for c in self.partner.calls))
+
+    def test_retrying_unsent_requests_does_not_reset_the_stale_clock(self):
+        self.raw_request(sent_minutes_ago=None)                      # unsent: retried every minute
+        run_catch_up()
+        self.assertIsNotNone(SyncState.objects.get(pk=1).last_checked_at)
+        self.assertFalse(SyncState.objects.filter(pk=2).exists())    # nothing stale was asked, so that clock is untouched
+
+    def test_the_unsent_retry_clock_is_60_seconds(self):
+        request = self.raw_request(sent_minutes_ago=None)
+        self.partner.submit_error = error.URLError("dropped mid-send")
+        run_catch_up()
+        sends = lambda: len([c for c in self.partner.real_calls() if c.get_method() == "POST"])
+        first = sends()
+        run_catch_up()
+        self.assertEqual(sends(), first)                             # inside the minute: not again
+        SyncState.objects.filter(pk=1).update(last_checked_at=timezone.now() - timedelta(seconds=61))
+        run_catch_up()
+        self.assertGreater(sends(), first)
+        self.assertEqual(PurchaseRequest.objects.get(pk=request.pk).status, "pending")
+
+    @override_settings(**TWO_PARTNERS, B2B_PARTNER_SUPPLIER_CODES={PROVIDER: SUPPLIER_CODE, "OTHER": SUPPLIER_CODE})
+    def test_a_sleeping_partner_does_not_hold_up_another(self):
+        sleeping = self.raw_request("OTHER", sent_minutes_ago=None)
+        awake = self.raw_request(PROVIDER, sent_minutes_ago=None)
+        self.partner.asleep_hosts = {"other.example"}
+        run_catch_up(force=True)
+        sleeping.refresh_from_db()
+        awake.refresh_from_db()
+        self.assertIsNone(sleeping.sent_at)                          # untouched
+        self.assertIsNotNone(awake.sent_at)                          # went through
+
+    @override_settings(**TWO_PARTNERS, B2B_PARTNER_SUPPLIER_CODES={PROVIDER: SUPPLIER_CODE, "OTHER": SUPPLIER_CODE})
+    def test_one_partners_failed_send_does_not_stop_another_partners(self):
+        failing = self.raw_request("OTHER", sent_minutes_ago=None)
+        fine = self.raw_request(PROVIDER, sent_minutes_ago=None)
+        self.partner.error_hosts = {"other.example"}
+        run_catch_up(force=True)
+        failing.refresh_from_db()
+        fine.refresh_from_db()
+        self.assertIsNone(failing.sent_at)
+        self.assertIsNotNone(fine.sent_at)
+
+    def test_only_a_bounded_number_of_local_imports_run_per_dashboard_load(self):
+        for _ in range(13):
+            request = self.make_request()
+            PurchaseRequest.objects.filter(pk=request.pk).update(status="accepted", decided_at=timezone.now())
+            PurchaseRequestItem.objects.filter(request=request).update(accepted_quantity=1, unit_price=Decimal("10"))
+        self.assertEqual(run_catch_up(), 10)
+        self.assertEqual(PurchaseRequest.objects.filter(order__isnull=True, status="accepted").count(), 3)
+        self.assertEqual(run_catch_up(), 3)                          # the rest on the next load

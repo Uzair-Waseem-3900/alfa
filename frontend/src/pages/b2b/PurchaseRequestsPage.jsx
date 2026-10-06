@@ -2,7 +2,9 @@ import { Navigate, useNavigate } from 'react-router-dom';
 import { ShoppingCart, Plus, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { usePurchaseRequests, usePurchaseRequestActions } from '../../hooks/useB2B';
+import { usePurchaseRequests, usePurchaseRequestActions, useProviders } from '../../hooks/useB2B';
+import { b2bApi } from '../../services/b2bApi';
+import WakePartnerButton from '../../components/b2b/WakePartnerButton';
 import { extractErrorMessage } from '../../utils/errorMessage';
 import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
@@ -41,6 +43,7 @@ const PurchaseRequestsPage = () => {
         filters, setFilters, refetch,
     } = usePurchaseRequests();
     const { sync, mutating } = usePurchaseRequestActions();
+    const { providers } = useProviders();
 
     if (!isAdmin) {
         return <Navigate to="/dashboard" replace />;
@@ -49,7 +52,11 @@ const PurchaseRequestsPage = () => {
     const handleSync = async () => {
         try {
             const result = await sync();
-            toast.success(result?.updated ? `${result.updated} request(s) updated` : 'Everything is up to date');
+            if (result?.partner_asleep) {
+                toast.warning('The partner is not awake, so nothing was checked. Press "Wake up" first.');
+            } else {
+                toast.success(result?.updated ? `${result.updated} request(s) updated` : 'Everything is up to date');
+            }
             await refetch();
         } catch (error) {
             toast.error(extractErrorMessage(error, 'Failed to check for updates'));
@@ -123,6 +130,14 @@ const PurchaseRequestsPage = () => {
                     </Button>
                 </div>
             </div>
+
+            {providers.length > 0 && (
+                <div className="flex flex-wrap gap-3">
+                    {providers.map((p) => (
+                        <WakePartnerButton key={p.key} partnerLabel={p.key} wake={() => b2bApi.providers.wake(p.key)} />
+                    ))}
+                </div>
+            )}
 
             {listError && (
                 <InlineAlert variant="error" title="Couldn't load requests" message={listError} onRetry={refetch} />

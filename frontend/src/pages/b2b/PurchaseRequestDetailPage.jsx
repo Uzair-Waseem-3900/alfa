@@ -5,6 +5,8 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { usePurchaseRequestDetail, usePurchaseRequestActions } from '../../hooks/useB2B';
 import { extractErrorMessage } from '../../utils/errorMessage';
+import { b2bApi } from '../../services/b2bApi';
+import WakePartnerButton from '../../components/b2b/WakePartnerButton';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import Badge from '../../components/ui/Badge';
@@ -100,7 +102,13 @@ const PurchaseRequestDetailPage = () => {
                     )}
                 </div>
 
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-start gap-2">
+                    {(request.status === 'pending' || (decided && !request.order)) && (
+                        <WakePartnerButton
+                            partnerLabel={request.provider_name}
+                            wake={() => b2bApi.providers.wake(request.provider_name)}
+                        />
+                    )}
                     {(request.status === 'pending' || (decided && !request.order)) && (
                         <Button variant="secondary" icon={RefreshCw} onClick={handleCheck} loading={mutating}>
                             Check for Updates

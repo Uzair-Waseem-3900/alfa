@@ -40,6 +40,8 @@ RATE_LIST_PATH = "/api/b2b/partner/rate-list/"
 PRODUCTS_PATH = "/api/b2b/partner/products/"
 PURCHASE_REQUESTS_PATH = "/api/b2b/partner/purchase-requests/"
 DECISIONS_PATH = "/api/b2b/partner/purchase-requests/decisions/"
+PING_PATH = "/api/b2b/partner/ping/"
+WAKE_TIMEOUT_SECONDS = 5.0     # one readiness check; the browser repeats it for up to 90s when the user presses "Wake up"
 KNOWN_STATUSES = {"not_requested", "pending", "approved", "rejected", "revoked"}
 REQUEST_STATUSES = {"pending", "accepted", "denied", "cancelled", "not_found"}
 
@@ -58,6 +60,10 @@ class ProviderRejected(ProviderError):
 
 class ProviderUnreachable(ProviderError):
     pass
+
+
+class PartnerNotAwake(ProviderError):
+    """The partner did not answer its readiness check, so NOTHING was changed and nothing else was sent."""
 
 
 class ProviderInvalid(ProviderError):
@@ -108,7 +114,8 @@ def _read_capped(resp, timeout: float) -> bytes:
 
 # secret / signature / req must never appear in a traceback or debug page.
 @sensitive_variables("secret", "signature", "req")
-def _call(provider: str, method: str, path: str, params=None, body=None, statuses=None) -> dict:
+def _call(provider: str, method: str, path: str, params=None, body=None, statuses=None, timeout=None,
+          refuse_codes=(404,)) -> dict:
     """
     One signed call. `body` is a dict sent as JSON (and signed). `statuses`, when
     given, is the set of values the reply's top-level "status" must be one of;
@@ -155,7 +162,7 @@ def _call(provider: str, method: str, path: str, params=None, body=None, statuse
     req = urlrequest.Request(
         url, data=payload if method == "POST" else None, method=method, headers=headers,
     )
-    timeout = config.timeout_seconds()
+    timeout = timeout if timeout is not None else config.timeout_seconds()
 
     try:
         with _open(req, timeout) as resp:
@@ -173,7 +180,7 @@ def _call(provider: str, method: str, path: str, params=None, body=None, statuse
         exc.close()
         if code == 400:
             raise ProviderInvalid(detail) from None
-        if code == 404:
+        if code in refuse_codes:
             raise ProviderRejected() from None
         logger.warning("b2b provider %r answered HTTP %s", provider, code)
         raise ProviderUnreachable() from None
@@ -299,3 +306,45 @@ def fetch_decisions(provider: str, request_uuids) -> list:
         return out
     except (KeyError, TypeError, AttributeError):
         raise ProviderUnreachable() from None
+
+
+# ---------------------------------------------------------------------------
+# Wake-up check
+# ---------------------------------------------------------------------------
+
+def ping(provider: str) -> None:
+    """One signed readiness call (5s limit). Returns normally only when the partner answered HTTP 200."""
+    # 401/403 as well as the partner's own bare 404: it answered but refused us, so waiting cannot help.
+    _call(provider, "GET", PING_PATH, timeout=WAKE_TIMEOUT_SECONDS, refuse_codes=(401, 403, 404))
+
+
+def wake_status(provider: str) -> str:
+    """
+    'awake'          the partner answered HTTP 200
+    'asleep'         no answer in time / connection failed / server error (it may still be waking up)
+    'not_configured' it answered but refused us, or this software isn't set up to reach it —
+                     waiting will not help (wrong secret, name or address)
+    """
+    try:
+        ping(provider)
+        return "awake"
+    except ProviderUnreachable:
+        return "asleep"
+    except ProviderError:
+        return "not_configured"
+
+
+def is_awake(provider: str) -> bool:
+    return wake_status(provider) == "awake"
+
+
+def ensure_awake(provider: str) -> None:
+    """
+    Gate for every operation that changes something or depends on the partner's data.
+    Raises PartnerNotAwake BEFORE anything is written or sent when the partner does not answer.
+    A refusal / bad configuration propagates as its own error (not_configured), not as "asleep".
+    """
+    try:
+        ping(provider)
+    except ProviderUnreachable:
+        raise PartnerNotAwake() from None

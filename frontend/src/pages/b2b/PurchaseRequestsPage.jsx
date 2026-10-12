@@ -70,6 +70,11 @@ const PurchaseRequestsPage = () => {
             render: (value) => <span className="font-medium text-neutral-900">{value}</span>,
         },
         {
+            key: 'supplier_name',
+            label: 'Supplier',
+            render: (value, row) => (value ? `${value} (${row.supplier_code})` : '—'),
+        },
+        {
             key: 'created_at',
             label: 'Created',
             render: (value) => <span className="text-neutral-600">{formatDateTime(value)}</span>,
@@ -176,7 +181,10 @@ const PurchaseRequestsPage = () => {
                                     className="w-full text-left bg-white rounded-2xl p-4 shadow-card active:bg-neutral-50"
                                 >
                                     <div className="flex items-start justify-between gap-3">
-                                        <span className="font-semibold text-neutral-900">{row.provider_name}</span>
+                                        <span className="font-semibold text-neutral-900">
+                                            {row.provider_name}
+                                            {row.supplier_name && <span className="block text-xs font-normal text-neutral-500">Supplier: {row.supplier_name}</span>}
+                                        </span>
                                         <div className="flex flex-wrap justify-end gap-1.5">
                                             <Badge variant={badge.variant}>{badge.label}</Badge>
                                             {!row.delivered && row.status === 'pending' && <Badge variant="warning">Waiting to send</Badge>}

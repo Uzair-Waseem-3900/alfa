@@ -41,6 +41,8 @@ const createErrorMessages = (error) => {
     const items = error?.response?.data?.items;
     if (Array.isArray(items)) return items.map(String);
     if (typeof items === 'string') return [items];
+    const supplierError = error?.response?.data?.supplier_id;
+    if (supplierError) return [String(Array.isArray(supplierError) ? supplierError[0] : supplierError)];
     return [extractErrorMessage(error, 'Failed to send the request')];
 };
 
@@ -56,6 +58,8 @@ const CreatePurchaseRequestPage = () => {
     const [selected, setSelected] = useState('');
     const provider = selected || providers[0]?.key || '';
     const [lines, setLines] = useState([]);
+    // Asked every time: the supplier this purchase will be booked under (starts empty on purpose).
+    const [supplier, setSupplier] = useState({ id: '', label: '' });
     const [note, setNote] = useState('');
     const [errors, setErrors] = useState([]);
     // Chosen once when the form opens: a double-click or a retried send can then never create a second request.
@@ -78,6 +82,12 @@ const CreatePurchaseRequestPage = () => {
             toast.error(extractErrorMessage(error, 'Could not search the partner right now'));
             return [];
         }
+    };
+
+    const searchSuppliers = async (query) => {
+        const res = await purchasesApi.suppliers.getAll({ search: query, page_size: 25 });
+        const results = res?.results ?? res ?? [];
+        return results.map((s) => ({ value: s.id, label: `${s.name} (${s.code})` }));
     };
 
     const searchShelves = async (query) => {
@@ -119,6 +129,7 @@ const CreatePurchaseRequestPage = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         const problems = [];
+        if (!supplier.id) problems.push('Choose the supplier this purchase is for.');
         if (lines.length === 0) problems.push('Add at least one product.');
         lines.forEach((l) => {
             const qty = parseInt(l.quantity, 10) || 0;
@@ -132,6 +143,7 @@ const CreatePurchaseRequestPage = () => {
         try {
             const result = await create({
                 provider,
+                supplier_id: supplier.id,
                 request_uuid: requestUuid,
                 note,
                 items: lines.map((l) => ({
@@ -186,6 +198,22 @@ const CreatePurchaseRequestPage = () => {
                             className="overflow-x-auto"
                         />
                     )}
+
+                    <Card className="p-6" hover={false}>
+                        <h3 className="font-semibold text-neutral-900 mb-1">Supplier</h3>
+                        <p className="text-sm text-neutral-500 mb-4">
+                            Which of your suppliers is this purchase for? The purchase order is booked under them once {provider} accepts.
+                        </p>
+                        <SearchableSelect
+                            value={supplier.id}
+                            selectedLabel={supplier.label || undefined}
+                            onChange={(value, option) => { setErrors([]); setSupplier({ id: value || '', label: option?.label ?? '' }); }}
+                            onSearch={searchSuppliers}
+                            placeholder="Search supplier..."
+                            disabled={mutating}
+                            required
+                        />
+                    </Card>
 
                     <Card className="p-6" hover={false}>
                         <h3 className="font-semibold text-neutral-900 mb-1">Products from {provider}</h3>

@@ -115,8 +115,9 @@ def _send(request: PurchaseRequest) -> None:
         sync_requests([request], checked=True)
 
 
-def create_purchase_request(*, provider: str, items: list, note: str, user, request_uuid=None):
+def create_purchase_request(*, provider: str, supplier_id: int, items: list, note: str, user, request_uuid=None):
     """
+    `supplier_id` = the local supplier this purchase will be booked under (chosen on the form).
     items = [{"product_id": <local product id>, "quantity": int, "discount": Decimal,
               "gst": Decimal, "wht": Decimal,
               "shelf_allocations": [{"shelf_id": int, "quantity": int}, ...]}, ...]
@@ -131,6 +132,8 @@ def create_purchase_request(*, provider: str, items: list, note: str, user, requ
             return existing, existing.sent_at is not None
 
     products = _validate_new_request(provider, items)
+    if not Supplier.objects.filter(pk=supplier_id, is_deleted=False).exists():
+        raise ValidationError({"supplier_id": "Choose an existing supplier."})
 
     # The partner must answer a wake-up check BEFORE anything is saved here or sent there.
     client.ensure_awake(provider)
@@ -138,7 +141,9 @@ def create_purchase_request(*, provider: str, items: list, note: str, user, requ
     try:
         with transaction.atomic():
             extra = {"request_uuid": request_uuid} if request_uuid is not None else {}
-            request = PurchaseRequest.objects.create(provider_name=provider, note=note or "", created_by=user, **extra)
+            request = PurchaseRequest.objects.create(
+                provider_name=provider, supplier_id=supplier_id, note=note or "", created_by=user, **extra,
+            )
             # Two bulk inserts for the whole request (not two per item).
             lines = PurchaseRequestItem.objects.bulk_create([
                 PurchaseRequestItem(
@@ -241,15 +246,13 @@ def _error_text(exc) -> str:
 
 
 def _import_locked(request: PurchaseRequest) -> None:
-    code = config.supplier_code_for(request.provider_name)
     supplier = (
-        Supplier.objects.filter(Q(code=code) | Q(code=code.upper()), is_deleted=False).order_by("id").first()
-        if code else None
+        Supplier.objects.filter(pk=request.supplier_id, is_deleted=False).first() if request.supplier_id else None
     )
     if supplier is None:
         raise ValidationError({"supplier": (
-            f"No supplier with code '{code}' exists for this partner. Create it (or fix the code in the settings)."
-            if code else "No supplier code is configured for this partner."
+            "The supplier chosen for this request no longer exists." if request.supplier_id
+            else "No supplier was chosen for this request."
         )})
     if request.created_by is None:
         raise ValidationError({"user": "The user who made this request no longer exists."})

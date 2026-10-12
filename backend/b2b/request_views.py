@@ -97,7 +97,8 @@ class PurchaseRequestListCreateView(ConsumerOnlyMixin, generics.ListCreateAPIVie
         data = serializer.validated_data
         try:
             purchase_request, delivered = create_purchase_request(
-                provider=provider, items=data["items"], note=data["note"], user=request.user,
+                provider=provider, supplier_id=data["supplier_id"], items=data["items"], note=data["note"],
+                user=request.user,
                 request_uuid=data.get("request_uuid"),
             )
         except client.ProviderError as exc:

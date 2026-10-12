@@ -41,6 +41,11 @@ class PurchaseRequest(models.Model):
         on_delete=models.SET_NULL, related_name="b2b_purchase_request",
     )
     order_number = models.CharField(max_length=30, blank=True, default="")
+    # The supplier (chosen on the form) this request's purchase order will be booked under.
+    # Null only for requests made before the choice existed.
+    supplier = models.ForeignKey(
+        "purchases.Supplier", null=True, blank=True, on_delete=models.PROTECT, related_name="+",
+    )
     # Why the last attempt to import an accepted request failed ("" when fine).
     import_error = models.TextField(blank=True, default="")
 

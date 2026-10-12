@@ -16,7 +16,7 @@ from rest_framework.test import APIClient
 from billing.utils import calculate_line_item
 from django.utils import timezone
 from ledger.models import SupplierLedgerEntry
-from purchases.models import Category, Inventory, Product, PurchaseOrder, Shelf, ShelfStock
+from purchases.models import Category, Inventory, Product, PurchaseOrder, Shelf, ShelfStock, Supplier
 from purchases.services import create_supplier
 
 from . import client as b2b_client
@@ -94,7 +94,7 @@ def accepted(*lines):
     ]}
 
 
-@override_settings(**CONSUMER_ON, B2B_PARTNER_SUPPLIER_CODES={PROVIDER: SUPPLIER_CODE})
+@override_settings(**CONSUMER_ON)
 class RequestBase(TestCase):
     def setUp(self):
         cache.clear()
@@ -120,7 +120,7 @@ class RequestBase(TestCase):
                 {"shelf_id": self.shelf_a.id, "quantity": 3}, {"shelf_id": self.shelf_b.id, "quantity": 2},
             ],
         }]
-        return {"provider": PROVIDER, "note": note, "items": items}
+        return {"provider": PROVIDER, "supplier_id": self.supplier.id, "note": note, "items": items}
 
     def make_request(self, items=None):
         response = self.api.post(LIST_URL, self.body(items), format="json")
@@ -167,6 +167,19 @@ class ProductSearchTests(RequestBase):
 
 
 class CreateTests(RequestBase):
+    def test_the_supplier_is_required_and_must_exist_and_nothing_is_sent_otherwise(self):
+        other = create_supplier(name="Gone Ltd", code="GONE", user=self.admin)
+        Supplier.objects.filter(pk=other.pk).update(is_deleted=True)
+        for label, supplier in (("missing", None), ("unknown", 999999), ("deleted", other.id)):
+            body = self.body()
+            body.pop("supplier_id")
+            if supplier is not None:
+                body["supplier_id"] = supplier
+            response = self.api.post(LIST_URL, body, format="json")
+            self.assertEqual(response.status_code, 400, label)
+        self.assertEqual(PurchaseRequest.objects.count(), 0)
+        self.assertEqual(self.partner.calls, [])                    # not even a wake-up call
+
     def test_saved_locally_sent_signed_and_shelves_never_leave(self):
         request = self.make_request()
         self.assertIsNotNone(request.sent_at)
@@ -199,7 +212,7 @@ class CreateTests(RequestBase):
                          "shelf_allocations": [{"shelf_id": self.shelf_a.id, "quantity": 1}]}],
         }
         for label, items in bad_sets.items():
-            response = self.api.post(LIST_URL, {"provider": PROVIDER, "items": items}, format="json")
+            response = self.api.post(LIST_URL, {"provider": PROVIDER, "supplier_id": self.supplier.id, "items": items}, format="json")
             self.assertEqual(response.status_code, 400, label)
         self.assertEqual(PurchaseRequest.objects.count(), 0)
         self.assertEqual(self.partner.calls, [])
@@ -329,21 +342,42 @@ class DecisionAndImportTests(RequestBase):
             self.assertIsNone(obj.order_id)
         self.assertEqual(PurchaseOrder.objects.count(), 0)
 
-    def test_missing_supplier_records_the_error_creates_nothing_and_is_retried(self):
+    def test_a_supplier_deleted_after_the_request_records_the_error_creates_nothing_and_is_retried(self):
         request = self.make_request()
-        with override_settings(B2B_PARTNER_SUPPLIER_CODES={PROVIDER: "NO-SUCH"}):
-            self.decide(request, accepted(("PEN-1", 5, "90.0000", "18.00", "1.00")))
+        Supplier.objects.filter(pk=self.supplier.pk).update(is_deleted=True)
+        self.decide(request, accepted(("PEN-1", 5, "90.0000", "18.00", "1.00")))
         request.refresh_from_db()
         self.assertEqual(request.status, "accepted")
         self.assertIsNone(request.order_id)
-        self.assertIn("NO-SUCH", request.import_error)
+        self.assertIn("no longer exists", request.import_error)
         self.assertEqual(PurchaseOrder.objects.count(), 0)          # rolled back: no draft left behind
         self.assertEqual(Inventory.objects.filter(quantity__gt=0).count(), 0)
 
-        run_catch_up(force=True)                                    # the supplier code is right again
+        Supplier.all_objects.filter(pk=self.supplier.pk).update(is_deleted=False)
+        run_catch_up(force=True)                                    # the supplier is back
         request.refresh_from_db()
         self.assertTrue(request.order_id)
         self.assertEqual(request.import_error, "")
+
+    def test_the_request_and_its_order_use_the_supplier_chosen_on_the_form(self):
+        chosen = create_supplier(name="Another Supplier", code="ANOTHER", user=self.admin)
+        body = self.body()
+        body["supplier_id"] = chosen.id
+        response = self.api.post(LIST_URL, body, format="json")
+        self.assertEqual(response.status_code, 201, response.content)
+        self.assertEqual((response.json()["supplier_name"], response.json()["supplier_code"]), ("Another Supplier", "ANOTHER"))
+        request = PurchaseRequest.objects.get(pk=response.json()["id"])
+        self.decide(request, accepted(("PEN-1", 5, "90.0000", "18.00", "1.00")))
+        request.refresh_from_db()
+        self.assertEqual(request.order.supplier_id, chosen.id)
+
+    def test_a_request_with_no_supplier_cannot_be_imported_and_says_why(self):
+        request = self.make_request()
+        PurchaseRequest.objects.filter(pk=request.pk).update(supplier=None)
+        self.decide(request, accepted(("PEN-1", 5, "90.0000", "18.00", "1.00")))
+        request.refresh_from_db()
+        self.assertIsNone(request.order_id)
+        self.assertIn("No supplier was chosen", request.import_error)
 
     def test_an_untrustworthy_answer_leaves_the_request_pending_with_the_reason(self):
         request = self.make_request()
@@ -807,7 +841,9 @@ TWO_PARTNERS = dict(
 class CatchUpCostAndFairnessTests(RequestBase):
     def raw_request(self, provider=PROVIDER, *, sent_minutes_ago=None):
         sent = None if sent_minutes_ago is None else timezone.now() - timedelta(minutes=sent_minutes_ago)
-        return PurchaseRequest.objects.create(provider_name=provider, created_by=self.admin, sent_at=sent)
+        return PurchaseRequest.objects.create(
+            provider_name=provider, created_by=self.admin, sent_at=sent, supplier=self.supplier,
+        )
 
     def test_idle_fresh_pending_and_failed_imports_each_cost_exactly_one_query(self):
         with self.assertNumQueries(1):
@@ -847,7 +883,7 @@ class CatchUpCostAndFairnessTests(RequestBase):
         self.assertGreater(sends(), first)
         self.assertEqual(PurchaseRequest.objects.get(pk=request.pk).status, "pending")
 
-    @override_settings(**TWO_PARTNERS, B2B_PARTNER_SUPPLIER_CODES={PROVIDER: SUPPLIER_CODE, "OTHER": SUPPLIER_CODE})
+    @override_settings(**TWO_PARTNERS)
     def test_a_sleeping_partner_does_not_hold_up_another(self):
         sleeping = self.raw_request("OTHER", sent_minutes_ago=None)
         awake = self.raw_request(PROVIDER, sent_minutes_ago=None)
@@ -858,7 +894,7 @@ class CatchUpCostAndFairnessTests(RequestBase):
         self.assertIsNone(sleeping.sent_at)                          # untouched
         self.assertIsNotNone(awake.sent_at)                          # went through
 
-    @override_settings(**TWO_PARTNERS, B2B_PARTNER_SUPPLIER_CODES={PROVIDER: SUPPLIER_CODE, "OTHER": SUPPLIER_CODE})
+    @override_settings(**TWO_PARTNERS)
     def test_one_partners_failed_send_does_not_stop_another_partners(self):
         failing = self.raw_request("OTHER", sent_minutes_ago=None)
         fine = self.raw_request(PROVIDER, sent_minutes_ago=None)

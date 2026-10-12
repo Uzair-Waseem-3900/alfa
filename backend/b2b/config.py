@@ -83,9 +83,3 @@ def failed_auth_limit():
         return max(1, int(count)), _UNITS[unit.strip().lower()]
     except (ValueError, KeyError):
         return 10, 3600
-
-
-def supplier_code_for(provider: str) -> str:
-    """The supplier record that stands for this provider on purchase orders ('' when not set)."""
-    codes = getattr(settings, "B2B_PARTNER_SUPPLIER_CODES", {}) or {}
-    return (codes.get(provider) or "").strip()

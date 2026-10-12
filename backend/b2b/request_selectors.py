@@ -10,7 +10,7 @@ from .models import PurchaseRequest, PurchaseRequestItem, PurchaseRequestShelf
 
 def list_purchase_requests(*, status: str = None) -> QuerySet:
     """Newest first. The item count is a correlated subquery, not a GROUP BY over every request."""
-    qs = PurchaseRequest.objects.select_related("created_by").annotate(
+    qs = PurchaseRequest.objects.select_related("created_by", "supplier").annotate(
         item_count=Coalesce(Subquery(
             PurchaseRequestItem.objects.filter(request=OuterRef("pk"))
             .order_by().values("request").annotate(n=Count("pk")).values("n"),
@@ -25,7 +25,7 @@ def list_purchase_requests(*, status: str = None) -> QuerySet:
 def get_purchase_request(pk: int):
     """One request with its items and (this software's own) shelf plan — fixed number of queries."""
     return (
-        PurchaseRequest.objects.select_related("created_by")
+        PurchaseRequest.objects.select_related("created_by", "supplier")
         .prefetch_related(
             Prefetch(
                 "items",

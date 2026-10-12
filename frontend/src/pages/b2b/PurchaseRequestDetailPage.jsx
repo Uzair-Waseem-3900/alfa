@@ -91,6 +91,9 @@ const PurchaseRequestDetailPage = () => {
                         Created {new Date(request.created_at).toLocaleString()}
                         {request.decided_at && ` · Decided ${new Date(request.decided_at).toLocaleString()}`}
                     </p>
+                    {request.supplier_name && (
+                        <p className="text-sm text-neutral-600 mt-2">Supplier: <b>{request.supplier_name}</b> ({request.supplier_code})</p>
+                    )}
                     {request.note && <p className="text-sm text-neutral-600 mt-2">Note: {request.note}</p>}
                     {request.order_number && (
                         <p className="text-sm mt-2">

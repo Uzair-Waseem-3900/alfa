@@ -24,6 +24,7 @@ class CreateRequestSerializer(serializers.Serializer):
     # Chosen by the form when it opens: a double-click or a retried POST then returns
     # the request that already exists instead of creating a second one.
     request_uuid = serializers.UUIDField(required=False)
+    supplier_id = serializers.IntegerField(min_value=1)       # the supplier this purchase is booked under
     note = serializers.CharField(max_length=500, allow_blank=True, default="")
     items = RequestItemInputSerializer(many=True, allow_empty=False, max_length=config.MAX_REQUEST_ITEMS)
 
@@ -37,11 +38,14 @@ class PurchaseRequestListSerializer(serializers.ModelSerializer):
     created_by = serializers.StringRelatedField(read_only=True)
     item_count = serializers.IntegerField(read_only=True)
     delivered = serializers.SerializerMethodField()
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True, allow_null=True, default=None)
+    supplier_code = serializers.CharField(source="supplier.code", read_only=True, allow_null=True, default=None)
 
     class Meta:
         model = PurchaseRequest
         fields = [
-            "id", "provider_name", "request_uuid", "status", "note", "created_by", "created_at",
+            "id", "provider_name", "request_uuid", "status", "note", "supplier", "supplier_name",
+            "supplier_code", "created_by", "created_at",
             "decided_at", "order", "order_number", "import_error", "item_count", "delivered",
         ]
         read_only_fields = fields

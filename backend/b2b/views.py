@@ -3,7 +3,7 @@ from rest_framework.exceptions import NotFound
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from . import client, config
+from . import client, config, wake
 from .permissions import IsAdminOrSuperuser
 
 DEFAULT_PAGE_SIZE = 25
@@ -109,15 +109,16 @@ class ProviderRequestView(ConsumerOnlyMixin, APIView):
 
 class ProviderWakeView(ConsumerOnlyMixin, APIView):
     """
-    POST /b2b/providers/<provider>/wake/ — the admin pressed "Wake up". One readiness check
-    (5s limit) of that partner's backend. The browser repeats it every few seconds, for at
-    most 90 seconds, until it answers; nothing here changes any data.
+    POST /b2b/providers/<provider>/wake/ — the admin pressed "Wake up". Answers at once with the
+    state of a readiness knock that stays open in the background (see wake.py) long enough for a
+    sleeping server to boot. The browser repeats it every few seconds, for at most 90 seconds,
+    until it answers; nothing here changes any data and no request is held open.
     """
     permission_classes = [IsAdminOrSuperuser]
 
     def post(self, request, provider):
         _known_provider(provider)
-        status = client.wake_status(provider)
+        status = wake.wake_partner(provider, client.wake_status)
         if status == "awake":
             return Response({"awake": True})
         return Response({

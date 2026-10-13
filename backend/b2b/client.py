@@ -312,13 +312,13 @@ def fetch_decisions(provider: str, request_uuids) -> list:
 # Wake-up check
 # ---------------------------------------------------------------------------
 
-def ping(provider: str) -> None:
-    """One signed readiness call (5s limit). Returns normally only when the partner answered HTTP 200."""
+def ping(provider: str, timeout: float = WAKE_TIMEOUT_SECONDS) -> None:
+    """One signed readiness call (5s limit unless the Wake up button asks for longer). Returns normally only when the partner answered HTTP 200."""
     # 401/403 as well as the partner's own bare 404: it answered but refused us, so waiting cannot help.
-    _call(provider, "GET", PING_PATH, timeout=WAKE_TIMEOUT_SECONDS, refuse_codes=(401, 403, 404))
+    _call(provider, "GET", PING_PATH, timeout=timeout, refuse_codes=(401, 403, 404))
 
 
-def wake_status(provider: str) -> str:
+def wake_status(provider: str, timeout: float = WAKE_TIMEOUT_SECONDS) -> str:
     """
     'awake'          the partner answered HTTP 200
     'asleep'         no answer in time / connection failed / server error (it may still be waking up)
@@ -326,7 +326,7 @@ def wake_status(provider: str) -> str:
                      waiting will not help (wrong secret, name or address)
     """
     try:
-        ping(provider)
+        ping(provider, timeout)
         return "awake"
     except ProviderUnreachable:
         return "asleep"

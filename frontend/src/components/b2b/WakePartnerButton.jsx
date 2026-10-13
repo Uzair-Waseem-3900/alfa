@@ -4,9 +4,10 @@ import { Power, X } from 'lucide-react';
 import Button from '../ui/Button';
 import { useToast } from '../../context/ToastContext';
 
-// The browser only starts waking a partner when the user presses this button. It asks OUR
-// backend (which makes one 5-second readiness check of the partner) every few seconds, for
-// at most 90 seconds. Nothing in the database changes while waking.
+// The browser only starts waking a partner when the user presses this button. Our backend then
+// keeps one readiness knock open in the background (a sleeping server only boots if the knock
+// stays open) and answers each poll at once with its state. We poll every few seconds, for at
+// most 90 seconds. Nothing in the database changes while waking.
 const WAKE_MAX_MS = 90000;
 const POLL_EVERY_MS = 3000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

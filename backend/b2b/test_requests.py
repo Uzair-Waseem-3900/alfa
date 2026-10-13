@@ -1,6 +1,7 @@
 import io
 import json
 from datetime import timedelta
+import threading
 import time
 import uuid
 from decimal import Decimal
@@ -19,7 +20,7 @@ from ledger.models import SupplierLedgerEntry
 from purchases.models import Category, Inventory, Product, PurchaseOrder, Shelf, ShelfStock, Supplier
 from purchases.services import create_supplier
 
-from . import client as b2b_client
+from . import client as b2b_client, wake
 from .models import PurchaseRequest, PurchaseRequestItem, SyncState
 from .request_services import fit_shelves, run_catch_up
 from .signing import compute_signature
@@ -101,6 +102,8 @@ class RequestBase(TestCase):
         self.admin = make_user("admin@example.com", is_staff=True)
         self.api = APIClient()
         self.api.force_authenticate(self.admin)
+        wake.reset()
+        self.addCleanup(wake.reset)
         self.partner = FakePartner()
         patcher = patch.object(b2b_client, "_open", self.partner)
         patcher.start()
@@ -758,8 +761,10 @@ class WakeGateTests(RequestBase):
     def test_the_wake_endpoint_reports_awake_asleep_and_not_configured(self):
         url = f"/api/b2b/providers/{PROVIDER}/wake/"
         self.assertEqual(self.api.post(url).json(), {"awake": True})
+        wake.reset()
         self.partner.asleep = True
         self.assertEqual(self.api.post(url).json(), {"awake": False, "reason": "asleep", "detail": None})
+        wake.reset()
         self.partner.asleep, self.partner.refuses = False, True
         body = self.api.post(url).json()
         self.assertEqual((body["awake"], body["reason"]), (False, "not_configured"))
@@ -798,6 +803,7 @@ class AuditHardeningWakeTests(RequestBase):
     def test_a_401_or_403_on_the_readiness_check_also_means_not_configured_not_asleep(self):
         url = f"/api/b2b/providers/{PROVIDER}/wake/"
         for code in (401, 403, 404):
+            wake.reset()
             self.partner.refuses, self.partner.refuse_code = True, code
             body = self.api.post(url).json()
             self.assertEqual((body["awake"], body["reason"]), (False, "not_configured"), code)
@@ -913,3 +919,84 @@ class CatchUpCostAndFairnessTests(RequestBase):
         self.assertEqual(run_catch_up(), 10)
         self.assertEqual(PurchaseRequest.objects.filter(order__isnull=True, status="accepted").count(), 3)
         self.assertEqual(run_catch_up(), 3)                          # the rest on the next load
+
+
+class WakeButtonKnockTests(RequestBase):
+    """A sleeping free-tier server only boots if the knock stays open, so the button holds one open in the background."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch.object(wake, "FIRST_ANSWER_WAIT", 0.05)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.url = f"/api/b2b/providers/{PROVIDER}/wake/"
+
+    def test_the_knock_waits_far_longer_than_the_five_second_gate(self):
+        seen = []
+        def check(partner, timeout):
+            seen.append(timeout)
+            return "awake"
+        self.assertEqual(wake.wake_partner(PROVIDER, check), "awake")
+        self.assertEqual(seen, [wake.HOLD_SECONDS])
+        self.assertGreaterEqual(wake.HOLD_SECONDS, 60)
+
+    def test_polls_return_at_once_while_the_partner_boots_and_say_awake_when_it_does(self):
+        release, started = threading.Event(), threading.Event()
+        calls = []
+        def slow_boot(partner, timeout):
+            calls.append(timeout)
+            started.set()
+            release.wait(10)
+            return "awake"
+        begin = time.monotonic()
+        self.assertEqual(wake.wake_partner(PROVIDER, slow_boot), "asleep")      # still booting
+        self.assertEqual(wake.wake_partner(PROVIDER, slow_boot), "asleep")      # a second poll: no second knock
+        self.assertEqual(wake.wake_partner(PROVIDER, slow_boot), "asleep")
+        self.assertLess(time.monotonic() - begin, 2)                            # nothing held the request open
+        self.assertTrue(started.wait(2))
+        self.assertEqual(len(calls), 1)                                         # exactly ONE knock in flight
+        release.set()
+        for _ in range(100):                                                    # the partner is up now
+            if wake.wake_partner(PROVIDER, slow_boot) == "awake":
+                break
+            time.sleep(0.02)
+        else:
+            self.fail("the poll never reported awake")
+        self.assertEqual(len(calls), 1)
+
+    def test_a_knock_that_timed_out_is_followed_by_a_fresh_one(self):
+        calls = []
+        def check(partner, timeout):
+            calls.append(1)
+            return "asleep"
+        wake.wake_partner(PROVIDER, check)
+        wake.wake_partner(PROVIDER, check)
+        self.assertEqual(len(calls), 2)
+
+    def test_a_crashing_check_reads_as_asleep_and_never_escapes(self):
+        def check(partner, timeout):
+            raise RuntimeError("boom")
+        self.assertEqual(wake.wake_partner(PROVIDER, check), "asleep")
+
+    def test_through_the_endpoint_an_asleep_partner_answers_instantly_and_a_woken_one_says_awake(self):
+        self.partner.asleep = True
+        begin = time.monotonic()
+        self.assertEqual(self.api.post(self.url).json()["reason"], "asleep")
+        self.assertLess(time.monotonic() - begin, 2)
+        self.partner.asleep = False
+        for _ in range(100):
+            if self.api.post(self.url).json().get("awake"):
+                break
+            time.sleep(0.02)
+        else:
+            self.fail("never reported awake")
+
+    def test_the_real_gate_for_changes_still_uses_the_short_check(self):
+        seen = []
+        original = b2b_client.ping
+        def spy(provider, timeout=b2b_client.WAKE_TIMEOUT_SECONDS):
+            seen.append(timeout)
+            return original(provider, timeout)
+        with patch.object(b2b_client, "ping", spy):
+            b2b_client.ensure_awake(PROVIDER)
+        self.assertEqual(seen, [b2b_client.WAKE_TIMEOUT_SECONDS])

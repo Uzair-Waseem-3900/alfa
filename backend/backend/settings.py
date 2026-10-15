@@ -79,6 +79,7 @@ EXTERNAL_APPS = [
 INSTALLED_APPS += EXTERNAL_APPS
 
 MIDDLEWARE = [
+    'backend.middleware.ForceServerErrorMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',

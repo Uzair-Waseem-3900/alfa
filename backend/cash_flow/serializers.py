@@ -80,6 +80,11 @@ class ExpenseWriteSerializer(serializers.ModelSerializer):
         return value.strip()
 
 
+class ExpenseSummarySerializer(serializers.Serializer):
+    total_amount = serializers.DecimalField(max_digits=20, decimal_places=4)
+    count        = serializers.IntegerField()
+
+
 # ---------------------------------------------------------------------------
 # Opening/closing cash (cash-in-hand breakdown, filter-only)
 # ---------------------------------------------------------------------------

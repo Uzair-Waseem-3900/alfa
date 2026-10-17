@@ -9,6 +9,7 @@ from .views import (
     ExpenseCategoryRetrieveUpdateDestroyView,
     ExpenseListCreateView,
     ExpenseRetrieveUpdateDestroyView,
+    ExpenseSummaryView,
     ExpensesBreakdownView,
     GrossProfitTrendView,
     InvoicesBreakdownView,
@@ -32,7 +33,8 @@ urlpatterns = [
 
     # Expenses
     path("expenses/",          ExpenseListCreateView.as_view(),          name="expense-list-create"),
-    path("expenses/<int:pk>/", ExpenseRetrieveUpdateDestroyView.as_view(), name="expense-detail"),
+    path("expenses/summary/",  ExpenseSummaryView.as_view(),             name="expense-summary"),
+    path("expenses/<int:pk>/",ExpenseRetrieveUpdateDestroyView.as_view(), name="expense-detail"),
 
     # Breakdown drill-down endpoints
     path("breakdown/cash-in-hand/",         CashInHandBreakdownView.as_view(),          name="breakdown-cash-in-hand"),

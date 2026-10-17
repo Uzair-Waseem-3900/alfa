@@ -98,6 +98,36 @@ def get_expense_category_by_id(pk: int) -> ExpenseCategory:
 # Expense
 # ---------------------------------------------------------------------------
 
+def _filter_expenses(
+    qs           : QuerySet,
+    *,
+    category_id  : int = None,
+    date_from    : str = None,
+    date_to      : str = None,
+    min_amount   : str = None,
+    max_amount   : str = None,
+    search       : str = None,
+) -> QuerySet:
+    """
+    Single source of the expense list filters — shared by the paginated list
+    and the filtered summary so the two can never disagree on semantics.
+    """
+    if _clean(search):
+        qs = qs.filter(search_q(_clean(search), "name", "description"))
+    if category_id:
+        qs = qs.filter(category_id=category_id)
+    if _clean(date_from):
+        qs = qs.filter(expense_date__gte=_clean(date_from))
+    if _clean(date_to):
+        qs = qs.filter(expense_date__lte=_clean(date_to))
+    if _clean(min_amount):
+        qs = qs.filter(amount__gte=_clean(min_amount))
+    if _clean(max_amount):
+        qs = qs.filter(amount__lte=_clean(max_amount))
+
+    return qs
+
+
 def get_all_expenses(
     *,
     category_id  : int = None,
@@ -120,21 +150,36 @@ def get_all_expenses(
     qs = Expense.objects.filter(is_deleted=False).select_related(
         "category", "category__created_by", "created_by", "updated_by"
     )
-
-    if _clean(search):
-        qs = qs.filter(search_q(_clean(search), "name", "description"))
-    if category_id:
-        qs = qs.filter(category_id=category_id)
-    if _clean(date_from):
-        qs = qs.filter(expense_date__gte=_clean(date_from))
-    if _clean(date_to):
-        qs = qs.filter(expense_date__lte=_clean(date_to))
-    if _clean(min_amount):
-        qs = qs.filter(amount__gte=_clean(min_amount))
-    if _clean(max_amount):
-        qs = qs.filter(amount__lte=_clean(max_amount))
-
+    qs = _filter_expenses(
+        qs, category_id=category_id, date_from=date_from, date_to=date_to,
+        min_amount=min_amount, max_amount=max_amount, search=search,
+    )
     return qs.order_by("-expense_date", "-created_at")
+
+
+def get_expenses_summary(
+    *,
+    category_id  : int = None,
+    date_from    : str = None,
+    date_to      : str = None,
+    min_amount   : str = None,
+    max_amount   : str = None,
+    search       : str = None,
+) -> dict:
+    """
+    Grand total + row count for the same filtered set as get_all_expenses(),
+    computed in ONE aggregate query (SUM and COUNT over the same scan, so the
+    two figures are a consistent snapshot). No joins/ordering — not needed.
+    """
+    qs = _filter_expenses(
+        Expense.objects.filter(is_deleted=False),
+        category_id=category_id, date_from=date_from, date_to=date_to,
+        min_amount=min_amount, max_amount=max_amount, search=search,
+    )
+    return qs.aggregate(
+        total_amount=Coalesce(Sum("amount"), Decimal("0")),
+        count=Count("id"),
+    )
 
 
 def get_expense_by_id(pk: int) -> Expense:

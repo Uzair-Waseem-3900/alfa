@@ -19,6 +19,7 @@ from .selectors import (
     get_customer_returns_breakdown,
     get_expense_by_id,
     get_expense_category_by_id,
+    get_expenses_summary,
     get_gross_profit_trend,
     get_invoice_payments_breakdown,
     get_invoices_breakdown,
@@ -37,6 +38,7 @@ from .serializers import (
     ExpenseCategoryReadSerializer,
     ExpenseCategoryWriteSerializer,
     ExpenseReadSerializer,
+    ExpenseSummarySerializer,
     ExpenseWriteSerializer,
     InvoiceBreakdownSerializer,
     InvoicePaymentBreakdownSerializer,
@@ -175,6 +177,27 @@ class ExpenseListCreateView(AllocationsListMixin, generics.ListCreateAPIView):
             user               = request.user,
         )
         return Response(ExpenseReadSerializer(obj).data, status=status.HTTP_201_CREATED)
+
+
+class ExpenseSummaryView(generics.RetrieveAPIView):
+    """
+    GET /cash-flow/expenses/summary/
+    Grand total + count of the expenses matching the same filters as the list.
+    Separate from the list so the page can render rows without waiting on it.
+    """
+    permission_classes = [IsAdminOrSuperuser]
+    serializer_class   = ExpenseSummarySerializer
+
+    def get_object(self):
+        p = self.request.query_params
+        return get_expenses_summary(
+            search      = p.get("search"),
+            category_id = p.get("category"),
+            date_from   = p.get("date_from"),
+            date_to     = p.get("date_to"),
+            min_amount  = p.get("min_amount"),
+            max_amount  = p.get("max_amount"),
+        )
 
 
 class ExpenseRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):

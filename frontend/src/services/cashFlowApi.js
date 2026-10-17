@@ -31,6 +31,11 @@ export const cashFlowApi = {
             const query = new URLSearchParams(params).toString();
             return api.get(`/cash-flow/expenses/${query ? `?${query}` : ''}`);
         },
+        // Grand total + count for the same filters as getAll (no page params).
+        getSummary: (params = {}) => {
+            const query = new URLSearchParams(params).toString();
+            return api.get(`/cash-flow/expenses/summary/${query ? `?${query}` : ''}`);
+        },
         getById: (id) => api.get(`/cash-flow/expenses/${id}/`),
         create: (data) => api.post('/cash-flow/expenses/', data),
         update: (id, data) => api.patch(`/cash-flow/expenses/${id}/`, data),

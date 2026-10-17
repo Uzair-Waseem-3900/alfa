@@ -19,7 +19,7 @@ from .selectors import (
 from payment_methods.models import PaymentMethod
 
 from .services import create_expense, delete_expense, update_expense
-from .views import CashInHandBreakdownView, ExpenseListCreateView, ExpensesBreakdownView
+from .views import CashInHandBreakdownView, ExpenseListCreateView, ExpenseSummaryView, ExpensesBreakdownView
 
 
 def make_admin(email="admin@example.com"):
@@ -356,6 +356,108 @@ class ExpenseAllocationQueryCountTests(CashFlowTestBase):
             self._make_expense("10")
         grown = self.count_queries(view, "/cash-flow/breakdown/expenses/")
         self.assertEqual(baseline, grown)
+
+
+class ExpenseSummaryTests(CashFlowTestBase):
+    """GET /cash-flow/expenses/summary/ — filtered grand total + count that
+    must agree exactly with the paginated list for the same params, in ONE
+    query."""
+
+    def setUp(self):
+        super().setUp()
+        from data_entry.services import create_opening_cash
+        from .services import create_expense_category
+        create_opening_cash(amount=Decimal("500000"), user=self.admin)
+        self.rent = create_expense_category(name="Rent", user=self.admin)
+        self.util = create_expense_category(name="Utilities", user=self.admin)
+        self.exp_a = self._make("Office rent", self.rent, "1000", date(2026, 1, 10), "monthly rent")
+        self.exp_b = self._make("Electricity", self.util, "250.50", date(2026, 2, 5), "power bill")
+        self.exp_c = self._make("Water", self.util, "49.50", date(2026, 3, 1), "")
+
+    def _make(self, name, category, amount, day, description):
+        return create_expense(
+            name=name, category_id=category.id, amount=Decimal(amount), expense_date=day,
+            method_allocations=self.cash_split(amount), description=description, user=self.admin,
+        )
+
+    def _get(self, params=None, user=None):
+        request = self.factory.get("/cash-flow/expenses/summary/", params or {})
+        force_authenticate(request, user=user or self.admin)
+        response = ExpenseSummaryView.as_view()(request)
+        response.render()
+        return response
+
+    def _list_totals(self, params):
+        """Sum + count across EVERY page of the list endpoint for `params`."""
+        total, count, page = Decimal("0"), 0, 1
+        while True:
+            request = self.factory.get("/cash-flow/expenses/", {**params, "page": page, "page_size": 2})
+            force_authenticate(request, user=self.admin)
+            response = ExpenseListCreateView.as_view()(request)
+            response.render()
+            data = response.data
+            total += sum(Decimal(r["amount"]) for r in data["results"])
+            count = data["count"]
+            if page >= data["total_pages"]:
+                return total, count
+            page += 1
+
+    def test_no_filters_totals_everything(self):
+        response = self._get()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.data["total_amount"]), Decimal("1300.00"))
+        self.assertEqual(response.data["count"], 3)
+
+    def test_each_filter_matches_the_list_exactly(self):
+        cases = [
+            {"category": self.util.id},
+            {"date_from": "2026-02-01"},
+            {"date_to": "2026-02-28"},
+            {"date_from": "2026-02-01", "date_to": "2026-02-28"},
+            {"min_amount": "100"},
+            {"max_amount": "100"},
+            {"search": "rent"},
+            {"category": self.util.id, "min_amount": "100"},
+        ]
+        for params in cases:
+            with self.subTest(params=params):
+                response = self._get(params)
+                self.assertEqual(response.status_code, 200)
+                list_total, list_count = self._list_totals(params)
+                self.assertEqual(Decimal(response.data["total_amount"]), list_total)
+                self.assertEqual(response.data["count"], list_count)
+
+    def test_known_filtered_values(self):
+        response = self._get({"category": self.util.id})
+        self.assertEqual(Decimal(response.data["total_amount"]), Decimal("300.00"))
+        self.assertEqual(response.data["count"], 2)
+
+    def test_excludes_soft_deleted(self):
+        delete_expense(pk=self.exp_a.pk, user=self.admin)
+        response = self._get()
+        self.assertEqual(Decimal(response.data["total_amount"]), Decimal("300.00"))
+        self.assertEqual(response.data["count"], 2)
+
+    def test_empty_result_is_zero(self):
+        response = self._get({"search": "no-such-expense-xyz"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(Decimal(response.data["total_amount"]), Decimal("0"))
+        self.assertEqual(response.data["count"], 0)
+
+    def test_non_admin_forbidden(self):
+        plain = User.objects.create_user(
+            email="plain@example.com", password="Pl4in-secret!", first_name="Plain", last_name="User",
+        )
+        self.assertEqual(self._get(user=plain).status_code, 403)
+
+    def test_single_query(self):
+        request = self.factory.get("/cash-flow/expenses/summary/", {"category": self.util.id, "search": "e"})
+        force_authenticate(request, user=self.admin)
+        with CaptureQueriesContext(connection) as ctx:
+            response = ExpenseSummaryView.as_view()(request)
+            response.render()
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(ctx.captured_queries), 1)
 
 
 class DraftAdvanceQuirkFixTests(CashFlowTestBase):

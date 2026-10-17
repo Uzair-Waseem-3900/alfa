@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { cashFlowApi } from '../services/cashFlowApi';
+import { extractErrorMessage } from '../utils/errorMessage';
 import { profitsApi } from '../services/profitsApi';
 import { usePaginatedList } from './usePaginatedList';
 
@@ -83,6 +84,53 @@ export const useBreakdown = (type, initialFilters = {}) => {
         usePaginatedList(fetchBreakdownPage, initialFilters);
 
     return { data, meta, extra, page, setPage, loading, error, filters, setFilters, refetch };
+};
+
+const isFilterValueSet = (v) => v !== '' && v !== null && v !== undefined;
+
+// Grand total + count for the expenses matching `filters` (the same filters
+// object useExpenses fetches the list with, so the two always agree). Fetches
+// independently of the list so rows render without waiting on it, and only
+// runs while at least one filter/search is active — `active` tells the page
+// whether to show the card at all.
+export const useExpensesSummary = (filters) => {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    // Ignore a slow earlier response arriving after a newer request started.
+    const requestId = useRef(0);
+
+    const cleaned = Object.fromEntries(
+        Object.entries(filters || {}).filter(([, v]) => isFilterValueSet(v))
+    );
+    const filtersKey = JSON.stringify(cleaned);
+    const active = Object.keys(cleaned).length > 0;
+
+    const fetchSummary = useCallback(async () => {
+        const id = ++requestId.current;
+        if (!active) {
+            setData(null);
+            setError(null);
+            setLoading(false);
+            return;
+        }
+        setLoading(true);
+        setError(null);
+        try {
+            const result = await cashFlowApi.expenses.getSummary(JSON.parse(filtersKey));
+            if (id === requestId.current) setData(result);
+        } catch (err) {
+            if (id === requestId.current) setError(extractErrorMessage(err, 'Failed to load total'));
+        } finally {
+            if (id === requestId.current) setLoading(false);
+        }
+    }, [filtersKey, active]);
+
+    useEffect(() => {
+        fetchSummary();
+    }, [fetchSummary]);
+
+    return { data, loading, error, active, refetch: fetchSummary };
 };
 
 // Hook for expense management — thin wrapper around usePaginatedList.

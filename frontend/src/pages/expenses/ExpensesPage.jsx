@@ -5,12 +5,13 @@ import {
     Plus, SlidersHorizontal, X, Pencil, Trash2, Receipt,
     AlertTriangle, Info,
 } from 'lucide-react';
-import { useExpenses, useAllExpenseCategories, useCashFlowStats } from '../../hooks/useCashFlow';
+import { useExpenses, useAllExpenseCategories, useExpensesSummary } from '../../hooks/useCashFlow';
 import { useToast } from '../../context/ToastContext';
 import { extractErrorMessage } from '../../utils/errorMessage';
 import { todayLocalDate } from '../../utils/helpers';
 import MethodSplitPicker, { isSplitBalanced } from '../../components/paymentMethods/MethodSplitPicker';
 import Button from '../../components/ui/Button';
+import Card from '../../components/ui/Card';
 import Modal from '../../components/ui/Modal';
 import Input from '../../components/ui/Input';
 import Select from '../../components/ui/Select';
@@ -66,6 +67,11 @@ const extractMethodError = (error) => {
     return val ? (Array.isArray(val) ? val[0] : val) : '';
 };
 
+const formatAmount = (value) => {
+    const num = typeof value === 'string' ? parseFloat(value) : value;
+    return isNaN(num) ? '0.00' : num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+
 const emptyForm = () => ({
     name: '',
     category: '',
@@ -82,7 +88,11 @@ const ExpensesPage = () => {
         filters, setFilters, refetch, create, update, delete: deleteExpense,
     } = useExpenses();
     const { data: categories, loading: categoriesLoading } = useAllExpenseCategories();
-    const { refetch: refetchStats } = useCashFlowStats();
+    // Independent of the list fetch — never part of the table's loading gate.
+    const {
+        data: summary, loading: summaryLoading, error: summaryError,
+        active: summaryActive, refetch: refetchSummary,
+    } = useExpensesSummary(filters);
 
     const [showModal, setShowModal] = useState(false);
     const [editingExpense, setEditingExpense] = useState(null);
@@ -141,7 +151,7 @@ const ExpensesPage = () => {
             }
             setShowModal(false);
             resetForm();
-            refetchStats();
+            refetchSummary();
         } catch (error) {
             const methodError = extractMethodError(error);
             if (methodError) {
@@ -180,7 +190,7 @@ const ExpensesPage = () => {
             await deleteExpense(id);
             toast.success('Expense deleted and cash in hand restored');
             setDeleteConfirm(null);
-            refetchStats();
+            refetchSummary();
         } catch (error) {
             toast.error(extractErrorMessage(error, 'Failed to delete expense'));
         } finally {
@@ -356,6 +366,31 @@ const ExpensesPage = () => {
             </div>
 
             {error && <InlineAlert variant="error" message={error} onRetry={refetch} />}
+
+            {summaryActive && (
+                <Card hover={false} className="!p-4 sm:!p-5">
+                    {summaryError ? (
+                        <InlineAlert variant="error" message={summaryError} onRetry={refetchSummary} />
+                    ) : summaryLoading || !summary ? (
+                        <div className="animate-pulse space-y-2" aria-busy="true" aria-label="Loading grand total">
+                            <div className="h-3 w-28 rounded bg-neutral-200" />
+                            <div className="h-7 w-48 rounded bg-neutral-200" />
+                        </div>
+                    ) : (
+                        <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-1">
+                            <div>
+                                <p className="text-sm text-neutral-500">Grand Total (filtered)</p>
+                                <p className="text-2xl font-bold text-neutral-900">
+                                    Rs. {formatAmount(summary.total_amount)}
+                                </p>
+                            </div>
+                            <p className="text-sm text-neutral-500">
+                                {summary.count.toLocaleString()} {summary.count === 1 ? 'expense' : 'expenses'}
+                            </p>
+                        </div>
+                    )}
+                </Card>
+            )}
 
             {loading || categoriesLoading ? (
                 <div className="flex items-center justify-center py-16">

@@ -482,3 +482,65 @@ class SavedInvoicePDF(models.Model):
 
     def __str__(self):
         return f"{self.invoice.bill_number} - {self.file_name}"
+
+
+# ---------------------------------------------------------------------------
+# Recovery tracking (temporary session of recorded customer payments)
+# ---------------------------------------------------------------------------
+
+class RecoveryState(models.Model):
+    """
+    Singleton (pk=1) — the single, business-wide recovery session. While
+    is_active, billing.services.create_payment logs every normal positive
+    payment into RecoveryRecord and keeps total_amount/record_count here as
+    stored fields, so reading the running total is O(1) (never a live SUM over
+    the records). Stopping deletes every RecoveryRecord and resets this row.
+    """
+
+    is_active    = models.BooleanField(default=False)
+    started_at   = models.DateTimeField(null=True, blank=True)
+    started_by   = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="recoveries_started",
+    )
+    total_amount = models.DecimalField(max_digits=20, decimal_places=4, default=0)
+    record_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "Recovery State"
+        verbose_name_plural = "Recovery State"
+
+    @classmethod
+    def get_instance(cls):
+        """Always returns the single RecoveryState record, creating it if needed."""
+        instance, _ = cls.objects.get_or_create(pk=1)
+        return instance
+
+    def __str__(self):
+        return f"Recovery ({'active' if self.is_active else 'inactive'})"
+
+
+class RecoveryRecord(models.Model):
+    """
+    One row per payment recorded while recovery was active. customer_name /
+    bill_number / amount are snapshots taken when the payment was recorded.
+    Hard-deleted (not soft-deleted) when the session stops — these are
+    temporary working rows, not audit history; the Payment rows themselves
+    are never touched.
+    """
+
+    payment       = models.OneToOneField(
+        Payment, on_delete=models.CASCADE, related_name="recovery_record",
+    )
+    customer_name = models.CharField(max_length=255)
+    bill_number   = models.CharField(max_length=30)
+    amount        = models.DecimalField(max_digits=18, decimal_places=4)
+    created_at    = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Recovery Record"
+        verbose_name_plural = "Recovery Records"
+        ordering = ["-id"]
+
+    def __str__(self):
+        return f"{self.bill_number} — {self.customer_name} {self.amount}"

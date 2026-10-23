@@ -132,6 +132,66 @@ export const useInvoicesSummary = (scope, filters, searchTerm) => {
     return { data, loading, error, active, refetch: fetchSummary };
 };
 
+// Recovery session status (active flag, running total, record count). Fetches
+// on mount, independent of any list on the page it's used in. start()/stop()
+// throw on failure so the caller can toast the error; the local state is
+// updated from the response so no second round trip is needed.
+export const useRecovery = () => {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null);
+    const [mutating, setMutating] = useState(false);
+
+    const fetchState = useCallback(async () => {
+        setLoading(true);
+        setError(null);
+        try {
+            setData(await billingApi.recovery.getState());
+        } catch (err) {
+            setError(extractErrorMessage(err, 'Failed to load recovery status'));
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchState();
+    }, [fetchState]);
+
+    const start = async () => {
+        setMutating(true);
+        try {
+            const state = await billingApi.recovery.start();
+            setData(state);
+            return state;
+        } finally {
+            setMutating(false);
+        }
+    };
+
+    const stop = async () => {
+        setMutating(true);
+        try {
+            await billingApi.recovery.stop();
+            setData({ is_active: false, started_at: null, total_amount: '0', record_count: 0 });
+        } finally {
+            setMutating(false);
+        }
+    };
+
+    return { data, loading, error, mutating, refetch: fetchState, start, stop };
+};
+
+// Paginated details of the active recovery session. Only mount the component
+// that calls this while the details are actually open — it fetches on mount.
+export const useRecoveryRecords = () => {
+    const {
+        data, meta, loading, error, page, setPage, refetch,
+    } = usePaginatedList((params) => billingApi.recovery.getRecords(params));
+
+    return { data, meta, loading, error, page, setPage, refetch };
+};
+
 // Hook for invoice detail with payment summary
 export const useInvoiceDetail = (invoiceId) => {
     const [invoice, setInvoice] = useState(null);

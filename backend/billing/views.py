@@ -16,6 +16,8 @@ from .selectors import (
     get_invoice_item_with_allocations_by_id,
     get_payment_by_id,
     get_payments_for_invoice,
+    get_recovery_records,
+    get_recovery_state,
     get_return_by_id,
     get_return_item_by_id,
     get_returns_for_invoice,
@@ -34,6 +36,8 @@ from .serializers import (
     InvoiceUpdateSerializer,
     PaymentReadSerializer,
     PaymentWriteSerializer,
+    RecoveryRecordSerializer,
+    RecoveryStateSerializer,
     ReturnCreateSerializer,
     ReturnItemReadSerializer,
     ReturnReadSerializer,
@@ -53,6 +57,8 @@ from .services import (
     delete_payment,
     set_invoice_item_shelf_allocations,
     set_return_item_shelf_allocations,
+    start_recovery,
+    stop_recovery,
     update_customer,
     update_invoice_due_date,
     update_invoice_items,
@@ -407,6 +413,63 @@ class PaymentDestroyView(generics.RetrieveDestroyAPIView):
     def destroy(self, request, *args, **kwargs):
         delete_payment(payment_id=self.kwargs["pk"], user=request.user)
         return Response({"detail": "Payment deleted."}, status=status.HTTP_200_OK)
+
+
+# ---------------------------------------------------------------------------
+# Recovery tracking (admin + superuser only)
+# ---------------------------------------------------------------------------
+
+class RecoveryStateView(generics.RetrieveAPIView):
+    """
+    GET /billing/recovery/
+    Whether recovery is active, since when, and the running total + count —
+    all stored fields, O(1).
+    """
+    permission_classes = [IsAdminOrSuperuser]
+    serializer_class   = RecoveryStateSerializer
+
+    def get_object(self):
+        return get_recovery_state()
+
+
+class RecoveryStartView(generics.UpdateAPIView):
+    """
+    POST /billing/recovery/start/
+    Starts the single business-wide recovery session (400 if already active).
+    """
+    permission_classes = [IsAdminOrSuperuser]
+    http_method_names  = ["post"]
+
+    def post(self, request, *args, **kwargs):
+        state = start_recovery(user=request.user)
+        return Response(RecoveryStateSerializer(state).data, status=status.HTTP_200_OK)
+
+
+class RecoveryStopView(generics.UpdateAPIView):
+    """
+    POST /billing/recovery/stop/
+    Stops recovery and permanently deletes all recovery records. Invoice
+    payments are not touched (400 if recovery isn't active).
+    """
+    permission_classes = [IsAdminOrSuperuser]
+    http_method_names  = ["post"]
+
+    def post(self, request, *args, **kwargs):
+        stop_recovery(user=request.user)
+        return Response({"detail": "Recovery stopped and recovery records cleared."}, status=status.HTTP_200_OK)
+
+
+class RecoveryRecordListView(generics.ListAPIView):
+    """
+    GET /billing/recovery/records/
+    Paginated details of the active session: customer name, bill number,
+    amount — newest first.
+    """
+    permission_classes = [IsAdminOrSuperuser]
+    serializer_class   = RecoveryRecordSerializer
+
+    def get_queryset(self):
+        return get_recovery_records()
 
 
 # ---------------------------------------------------------------------------

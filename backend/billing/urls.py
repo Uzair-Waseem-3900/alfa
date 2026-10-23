@@ -22,6 +22,10 @@ from .views import (
     InvoiceRetrieveUpdateDestroyView,
     InvoiceSummaryView,
     InvoiceSavedPDFListView,
+    RecoveryRecordListView,
+    RecoveryStartView,
+    RecoveryStateView,
+    RecoveryStopView,
     InvoiceSavePDFView,
     PaymentDestroyView,
     PaymentListCreateView,
@@ -44,6 +48,12 @@ urlpatterns = [
     path("invoices/drafts/", DraftInvoiceListView.as_view(), name="invoice-drafts"),
     path("invoices/due/", DueInvoiceListView.as_view(), name="invoice-due"),
     path("invoices/summary/", InvoiceSummaryView.as_view(), name="invoice-summary"),
+
+    # Recovery tracking
+    path("recovery/", RecoveryStateView.as_view(), name="recovery-state"),
+    path("recovery/start/", RecoveryStartView.as_view(), name="recovery-start"),
+    path("recovery/stop/", RecoveryStopView.as_view(), name="recovery-stop"),
+    path("recovery/records/", RecoveryRecordListView.as_view(), name="recovery-records"),
     path("invoices/<int:pk>/", InvoiceRetrieveUpdateDestroyView.as_view(), name="invoice-detail"),
     path("invoices/<int:pk>/confirm/", InvoiceConfirmView.as_view(), name="invoice-confirm"),
     path("invoices/<int:pk>/due-date/", InvoiceDueDateUpdateView.as_view(), name="invoice-due-date-update"),

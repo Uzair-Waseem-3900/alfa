@@ -2,7 +2,7 @@ from django.contrib import admin
 
 from .models import (
     Customer, FIFOLedger, Invoice, InvoiceItem,
-    Payment, Return, ReturnItem,
+    Payment, RecoveryRecord, RecoveryState, Return, ReturnItem,
 )
 
 
@@ -107,3 +107,21 @@ class ReturnAdmin(AuditAdminMixin, SoftDeleteAdminMixin, admin.ModelAdmin):
         "total_return_amount", "total_return_cogs",
     )
     inlines = [ReturnItemInline]
+
+
+@admin.register(RecoveryState)
+class RecoveryStateAdmin(admin.ModelAdmin):
+    list_display = ["is_active", "started_at", "started_by", "total_amount", "record_count"]
+    readonly_fields = ["is_active", "started_at", "started_by", "total_amount", "record_count"]
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(RecoveryRecord)
+class RecoveryRecordAdmin(admin.ModelAdmin):
+    list_display = ["bill_number", "customer_name", "amount", "created_at"]
+    readonly_fields = ["payment", "customer_name", "bill_number", "amount", "created_at"]

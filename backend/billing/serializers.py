@@ -6,7 +6,8 @@ from payment_methods.serializers import MethodAllocationInputSerializer
 
 from .models import (
     Customer, Invoice, InvoiceItem, InvoiceItemShelfAllocation,
-    InvoiceReturnItemShelfAllocation, Payment, Return, ReturnItem,
+    InvoiceReturnItemShelfAllocation, Payment, RecoveryRecord, RecoveryState,
+    Return, ReturnItem,
 )
 
 
@@ -353,6 +354,20 @@ class InvoiceItemWriteSerializer(serializers.Serializer):
 # ---------------------------------------------------------------------------
 # Invoice
 # ---------------------------------------------------------------------------
+
+class RecoveryStateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RecoveryState
+        fields = ["is_active", "started_at", "total_amount", "record_count"]
+        read_only_fields = fields
+
+
+class RecoveryRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RecoveryRecord
+        fields = ["id", "customer_name", "bill_number", "amount", "created_at"]
+        read_only_fields = fields
+
 
 class InvoiceSummarySerializer(serializers.Serializer):
     count             = serializers.IntegerField()

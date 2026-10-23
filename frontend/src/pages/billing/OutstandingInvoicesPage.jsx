@@ -9,6 +9,7 @@ import SearchBar from '../../components/ui/SearchBar';
 import Button from '../../components/ui/Button';
 import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import PaymentStatusBadge from '../../components/billing/PaymentStatusBadge';
+import RecoveryPanel from '../../components/billing/RecoveryPanel';
 import InvoiceStatusBadge from '../../components/billing/InvoiceStatusBadge';
 import FilterBar from '../../components/ui/FilterBar';
 import Pagination from '../../components/ui/Pagination';
@@ -34,6 +35,7 @@ const urgencyClasses = (num) => {
 const OutstandingInvoicesPage = () => {
     const navigate = useNavigate();
     const { user } = useAuth();
+    const isAdmin = user?.role === 'admin' || user?.role === 'superuser';
 
     const [searchTerm, setSearchTerm] = useState('');
     const [showFilters, setShowFilters] = useState(false);
@@ -155,6 +157,9 @@ const OutstandingInvoicesPage = () => {
                     )}
                 </div>
             </div>
+
+            {/* Own status request + loading — never part of the list's loading gate. */}
+            {isAdmin && <RecoveryPanel />}
 
             <div className="space-y-4">
                 <div className="flex flex-col sm:flex-row gap-3">

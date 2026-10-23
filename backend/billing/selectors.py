@@ -12,7 +12,8 @@ from purchases.selectors import _day_start, _next_day_start
 
 from .models import (
     Customer, Invoice, InvoiceItem, InvoiceItemShelfAllocation,
-    InvoiceReturnItemShelfAllocation, Payment, Return, ReturnItem,
+    InvoiceReturnItemShelfAllocation, Payment, RecoveryRecord, RecoveryState,
+    Return, ReturnItem,
 )
 
 
@@ -688,3 +689,17 @@ def get_invoices_summary(*, scope: str, params) -> dict:
         count=Count("id"),
         total_outstanding=Coalesce(Sum("credit_outstanding"), Decimal("0")),
     )
+
+
+# ---------------------------------------------------------------------------
+# Recovery tracking
+# ---------------------------------------------------------------------------
+
+def get_recovery_state() -> RecoveryState:
+    """The single recovery session row — O(1), every number is a stored field."""
+    return RecoveryState.get_instance()
+
+
+def get_recovery_records() -> QuerySet:
+    """Records of the active session, newest first (RecoveryRecord.Meta.ordering)."""
+    return RecoveryRecord.objects.all()

@@ -18,6 +18,18 @@ export const billingApi = {
         delete: (id) => api.delete(`/billing/customers/${id}/`),
     },
 
+    // Recovery tracking (admin/superuser only) — a single business-wide session
+    // that records invoice payments while active.
+    recovery: {
+        getState: () => api.get('/billing/recovery/'),
+        start: () => api.post('/billing/recovery/start/'),
+        stop: () => api.post('/billing/recovery/stop/'),
+        getRecords: (params = {}) => {
+            const query = new URLSearchParams(params).toString();
+            return api.get(`/billing/recovery/records/${query ? `?${query}` : ''}`);
+        },
+    },
+
     // Invoices
     invoices: {
         getAll: (params = {}) => {

@@ -1,7 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from django.db import IntegrityError, transaction
-from django.db.models import Sum
+from django.db.models import F, Sum
 from django.utils import timezone
 
 DEFAULT_DUE_DATE_DAYS = 7
@@ -10,7 +10,8 @@ from rates.selectors import get_price_at_date
 
 from .models import (
     Customer, FIFOLedger, Invoice, InvoiceItem, InvoiceItemShelfAllocation,
-    InvoiceReturnItemShelfAllocation, Payment, Return, ReturnItem,
+    InvoiceReturnItemShelfAllocation, Payment, RecoveryRecord, RecoveryState,
+    Return, ReturnItem,
 )
 from .selectors import (
     get_available_purchase_batches,
@@ -1388,6 +1389,11 @@ def create_payment(
         trigger="payment_received", reference=invoice.bill_number,
     )
 
+    # Only this normal-payment path logs into an active recovery session —
+    # advance payments and return credit notes are created directly (never
+    # through create_payment), so they are never recorded.
+    _record_recovery_payment(payment, invoice)
+
     return payment
 
 
@@ -1418,6 +1424,94 @@ def delete_payment(*, payment_id: int, user) -> None:
         customer_id=invoice.customer_id, user=user,
         trigger="payment_deleted", reference=invoice.bill_number,
     )
+
+    # No-op for credit notes and for payments recorded before/outside a session.
+    _remove_recovery_payment(payment)
+
+
+# ---------------------------------------------------------------------------
+# Recovery tracking services
+# ---------------------------------------------------------------------------
+
+# Stop deletes the session's records in bounded batches (architecture.md: never
+# one giant pk__in over an unbounded set).
+RECOVERY_DELETE_BATCH = 500
+
+
+def _record_recovery_payment(payment, invoice) -> None:
+    """
+    Log a just-created normal payment into the active recovery session.
+    ONE conditional UPDATE on the singleton ("if active: bump total/count"),
+    so with recovery off the cost is a single no-op statement, and it is
+    race-safe against start/stop: a payment arriving while stop_recovery
+    holds the row lock waits for it, then sees is_active=False and records
+    nothing. Runs inside create_payment's transaction.
+    """
+    updated = RecoveryState.objects.filter(pk=1, is_active=True).update(
+        total_amount=F("total_amount") + payment.amount,
+        record_count=F("record_count") + 1,
+    )
+    if updated:
+        RecoveryRecord.objects.create(
+            payment=payment,
+            customer_name=invoice.customer.name,
+            bill_number=invoice.bill_number,
+            amount=payment.amount,
+        )
+
+
+def _remove_recovery_payment(payment) -> None:
+    """Undo _record_recovery_payment when a recorded payment is deleted.
+    Credit notes / payments never recorded have no row — nothing to do."""
+    record = RecoveryRecord.objects.filter(payment=payment).first()
+    if record is None:
+        return
+    RecoveryState.objects.filter(pk=1, is_active=True).update(
+        total_amount=F("total_amount") - record.amount,
+        record_count=F("record_count") - 1,
+    )
+    record.delete()
+
+
+def start_recovery(*, user) -> RecoveryState:
+    """Turns the single business-wide recovery session on with a clean slate."""
+    from rest_framework.exceptions import ValidationError
+
+    RecoveryState.get_instance()  # make sure the singleton row exists
+    updated = RecoveryState.objects.filter(pk=1, is_active=False).update(
+        is_active=True, started_at=timezone.now(), started_by=user,
+        total_amount=0, record_count=0,
+    )
+    if not updated:
+        raise ValidationError({"recovery": "Recovery is already active."})
+    return RecoveryState.objects.get(pk=1)
+
+
+@transaction.atomic
+def stop_recovery(*, user) -> None:
+    """
+    Ends the session: PERMANENTLY deletes every RecoveryRecord (temporary
+    working rows — deliberately not soft-deleted) and resets the singleton.
+    The Payment rows and invoice balances are never touched.
+    """
+    from rest_framework.exceptions import ValidationError
+
+    state = RecoveryState.objects.select_for_update().filter(pk=1).first()
+    if state is None or not state.is_active:
+        raise ValidationError({"recovery": "Recovery is not active."})
+
+    while True:
+        batch = list(RecoveryRecord.objects.values_list("pk", flat=True)[:RECOVERY_DELETE_BATCH])
+        if not batch:
+            break
+        RecoveryRecord.objects.filter(pk__in=batch).delete()
+
+    state.is_active = False
+    state.started_at = None
+    state.started_by = None
+    state.total_amount = 0
+    state.record_count = 0
+    state.save(update_fields=["is_active", "started_at", "started_by", "total_amount", "record_count"])
 
 
 # ---------------------------------------------------------------------------

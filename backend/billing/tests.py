@@ -19,13 +19,13 @@ from purchases.services import (
 from rates.services import create_rate
 from users.models import User
 
-from .models import Invoice, Payment, Return
+from .models import Invoice, Payment, RecoveryRecord, RecoveryState, Return
 from .services import (
     DEFAULT_DUE_DATE_DAYS, accept_return, cancel_return, confirm_invoice,
     create_customer, create_invoice, create_payment, create_return,
     delete_invoice, delete_payment, set_invoice_item_shelf_allocations,
-    set_return_item_shelf_allocations, update_invoice_due_date,
-    update_invoice_items, update_return_items,
+    set_return_item_shelf_allocations, start_recovery, stop_recovery,
+    update_invoice_due_date, update_invoice_items, update_return_items,
 )
 from .views import (
     AllInvoicePaymentsView, AllOutstandingInvoicesView, ConfirmedInvoiceListView,
@@ -33,8 +33,9 @@ from .views import (
     DueInvoiceListView, InvoiceAutoAllocateShelvesView, InvoiceConfirmView,
     InvoiceDueDateUpdateView, InvoiceListCreateView,
     InvoicePaymentSummaryView, InvoiceRetrieveUpdateDestroyView, InvoiceSummaryView,
-    PaymentListCreateView, ReturnAcceptView, ReturnListCreateView,
-    ReturnRetrieveUpdateDestroyView,
+    PaymentDestroyView, PaymentListCreateView, RecoveryRecordListView,
+    RecoveryStartView, RecoveryStateView, RecoveryStopView, ReturnAcceptView,
+    ReturnListCreateView, ReturnRetrieveUpdateDestroyView,
 )
 
 
@@ -1200,6 +1201,320 @@ class InvoiceSummaryTests(BillingTestBase):
                     response.render()
                 self.assertEqual(response.status_code, 200)
                 self.assertEqual(len(ctx.captured_queries), 1)
+
+
+class RecoveryTests(BillingTestBase):
+    """Recovery tracking: a single business-wide session that logs every
+    normal positive invoice payment (customer name, bill number, amount) and
+    keeps a stored running total; Stop hard-deletes the records only."""
+
+    def setUp(self):
+        super().setUp()
+        self.shop = create_customer(name="Corner Shop", code="CS", address="Side St", user=self.admin)
+        self.product = self.make_stocked_product(stock=50)
+        self.inv_a = self._confirmed(self.customer, 4)   # 400, customer "Big Mart"
+        self.inv_b = self._confirmed(self.shop, 2)       # 200, customer "Corner Shop"
+        self.today = timezone.localtime(timezone.now()).date()
+
+    def tearDown(self):
+        cache.clear()  # per-user DRF throttle lives in the shared locmem cache
+        super().tearDown()
+
+    def _confirmed(self, customer, quantity):
+        invoice = create_invoice(
+            customer_id=customer.id,
+            items=[{"product_id": self.product.id, "quantity": quantity}],
+            user=self.admin,
+        )
+        self.allocate_invoice_items(invoice)
+        return confirm_invoice(invoice_id=invoice.id, user=self.admin)
+
+    def _pay(self, invoice, amount):
+        return create_payment(
+            invoice_id=invoice.id, amount=Decimal(amount),
+            method_allocations=self.cash_split(amount), payment_date=self.today, user=self.admin,
+        )
+
+    def _call(self, view_cls, method="get", *, user=None, data=None, url="/billing/recovery/", **kwargs):
+        cache.clear()
+        request = getattr(self.factory, method)(url, data, format="json") if data is not None \
+            else getattr(self.factory, method)(url)
+        force_authenticate(request, user=user or self.admin)
+        response = view_cls.as_view()(request, **kwargs)
+        response.render()
+        return response
+
+    def _state(self):
+        return RecoveryState.get_instance()
+
+    # ---- lifecycle ---------------------------------------------------------
+
+    def test_inactive_by_default(self):
+        response = self._call(RecoveryStateView)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data["is_active"])
+        self.assertEqual(Decimal(response.data["total_amount"]), Decimal("0"))
+        self.assertEqual(response.data["record_count"], 0)
+
+    def test_start_activates_with_clean_slate(self):
+        response = self._call(RecoveryStartView, "post")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["is_active"])
+        self.assertIsNotNone(response.data["started_at"])
+        self.assertEqual(Decimal(response.data["total_amount"]), Decimal("0"))
+        self.assertEqual(response.data["record_count"], 0)
+        self.assertEqual(self._state().started_by, self.admin)
+
+    def test_double_start_is_400(self):
+        self._call(RecoveryStartView, "post")
+        self.assertEqual(self._call(RecoveryStartView, "post").status_code, 400)
+
+    def test_stop_when_inactive_is_400(self):
+        self.assertEqual(self._call(RecoveryStopView, "post").status_code, 400)
+
+    # ---- recording ---------------------------------------------------------
+
+    def test_payments_while_active_are_recorded_with_snapshots_and_total(self):
+        start_recovery(user=self.admin)
+        self._pay(self.inv_a, "150")
+        self._pay(self.inv_b, "50")
+
+        state = self._state()
+        self.assertEqual(state.total_amount, Decimal("200"))
+        self.assertEqual(state.record_count, 2)
+        records = {r.bill_number: r for r in RecoveryRecord.objects.all()}
+        self.assertEqual(set(records), {self.inv_a.bill_number, self.inv_b.bill_number})
+        rec_a = records[self.inv_a.bill_number]
+        self.assertEqual(rec_a.customer_name, "Big Mart")
+        self.assertEqual(rec_a.amount, Decimal("150"))
+        self.assertEqual(records[self.inv_b.bill_number].customer_name, "Corner Shop")
+
+    def test_payments_while_inactive_are_not_recorded(self):
+        self._pay(self.inv_a, "150")
+        self.assertEqual(RecoveryRecord.objects.count(), 0)
+        self.assertEqual(self._state().total_amount, Decimal("0"))
+
+    def test_payments_before_start_are_not_counted(self):
+        self._pay(self.inv_a, "100")
+        start_recovery(user=self.admin)
+        self._pay(self.inv_a, "50")
+        state = self._state()
+        self.assertEqual(state.total_amount, Decimal("50"))
+        self.assertEqual(state.record_count, 1)
+
+    def test_advance_payments_and_return_credit_notes_are_not_recorded(self):
+        start_recovery(user=self.admin)
+
+        # advance payment taken when the invoice is created
+        advance_invoice = create_invoice(
+            customer_id=self.customer.id,
+            items=[{"product_id": self.product.id, "quantity": 1}],
+            payment_type="advance", advance_amount=Decimal("100"),
+            method_allocations=self.cash_split("100"), user=self.admin,
+        )
+        self.allocate_invoice_items(advance_invoice)
+        confirm_invoice(invoice_id=advance_invoice.id, user=self.admin)
+
+        # return -> negative credit-note Payment
+        item = self.inv_a.items.first()
+        ret = create_return(
+            invoice_id=self.inv_a.id, items=[{"invoice_item_id": item.id, "quantity": 1}], user=self.admin,
+        )
+        self.allocate_return_items(ret)
+        accept_return(return_id=ret.id, user=self.admin)
+
+        self.assertTrue(Payment.objects.filter(invoice=advance_invoice).exists())
+        self.assertTrue(Payment.objects.filter(invoice=self.inv_a, amount__lt=0).exists())
+        self.assertEqual(RecoveryRecord.objects.count(), 0)
+        state = self._state()
+        self.assertEqual(state.total_amount, Decimal("0"))
+        self.assertEqual(state.record_count, 0)
+
+    # ---- deleting a recorded payment --------------------------------------
+
+    def test_deleting_a_recorded_payment_removes_its_record_and_lowers_total(self):
+        start_recovery(user=self.admin)
+        p1 = self._pay(self.inv_a, "150")
+        self._pay(self.inv_b, "50")
+
+        delete_payment(payment_id=p1.id, user=self.admin)
+
+        state = self._state()
+        self.assertEqual(state.total_amount, Decimal("50"))
+        self.assertEqual(state.record_count, 1)
+        self.assertEqual(RecoveryRecord.objects.count(), 1)
+
+    def test_deleting_an_unrecorded_payment_leaves_the_session_alone(self):
+        before = self._pay(self.inv_a, "100")       # recorded before start
+        start_recovery(user=self.admin)
+        self._pay(self.inv_b, "50")
+        delete_payment(payment_id=before.id, user=self.admin)
+        state = self._state()
+        self.assertEqual(state.total_amount, Decimal("50"))
+        self.assertEqual(state.record_count, 1)
+
+    # ---- stop --------------------------------------------------------------
+
+    def test_stop_deletes_records_but_never_the_payments(self):
+        start_recovery(user=self.admin)
+        self._pay(self.inv_a, "150")
+        self._pay(self.inv_b, "50")
+        payments_before = Payment.all_objects.count()
+
+        response = self._call(RecoveryStopView, "post")
+        self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(RecoveryRecord.objects.count(), 0)
+        state = self._state()
+        self.assertFalse(state.is_active)
+        self.assertIsNone(state.started_at)
+        self.assertEqual(state.total_amount, Decimal("0"))
+        self.assertEqual(state.record_count, 0)
+
+        # the real payments and invoice balances are untouched
+        self.assertEqual(Payment.all_objects.count(), payments_before)
+        self.assertFalse(Payment.all_objects.filter(is_deleted=True).exists())
+        self.inv_a.refresh_from_db()
+        self.inv_b.refresh_from_db()
+        self.assertEqual(self.inv_a.credit_outstanding, Decimal("250"))
+        self.assertEqual(self.inv_b.credit_outstanding, Decimal("150"))
+
+    def test_stop_deletes_in_bounded_batches(self):
+        start_recovery(user=self.admin)
+        for _ in range(5):
+            self._pay(self.inv_a, "10")
+        self.assertEqual(RecoveryRecord.objects.count(), 5)
+        with patch("billing.services.RECOVERY_DELETE_BATCH", 2):
+            stop_recovery(user=self.admin)
+        self.assertEqual(RecoveryRecord.objects.count(), 0)
+
+    def test_restart_after_stop_begins_clean(self):
+        start_recovery(user=self.admin)
+        self._pay(self.inv_a, "150")
+        stop_recovery(user=self.admin)
+        start_recovery(user=self.admin)
+        state = self._state()
+        self.assertTrue(state.is_active)
+        self.assertEqual(state.total_amount, Decimal("0"))
+        self.assertEqual(state.record_count, 0)
+        self.assertEqual(RecoveryRecord.objects.count(), 0)
+
+    # ---- API layer ---------------------------------------------------------
+
+    def test_full_flow_through_the_api_views(self):
+        self.assertEqual(self._call(RecoveryStartView, "post").status_code, 200)
+
+        response = self._call(
+            PaymentListCreateView, "post", url=f"/billing/invoices/{self.inv_a.id}/payments/",
+            data={
+                "invoice": self.inv_a.id, "amount": "150", "payment_date": self.today.isoformat(),
+                "method_allocations": [{"payment_method": self.cash.id, "amount": "150"}],
+            },
+            invoice_id=self.inv_a.id,
+        )
+        self.assertEqual(response.status_code, 201)
+        payment_id = response.data["id"]
+
+        state = self._call(RecoveryStateView).data
+        self.assertEqual(Decimal(state["total_amount"]), Decimal("150"))
+        self.assertEqual(state["record_count"], 1)
+
+        records = self._call(RecoveryRecordListView, url="/billing/recovery/records/").data
+        self.assertEqual(records["count"], 1)
+        self.assertEqual(
+            set(records["results"][0]),
+            {"id", "customer_name", "bill_number", "amount", "created_at"},
+        )
+
+        deleted = self._call(
+            PaymentDestroyView, "delete", url=f"/billing/payments/{payment_id}/", pk=payment_id,
+        )
+        self.assertEqual(deleted.status_code, 200)
+        state = self._call(RecoveryStateView).data
+        self.assertEqual(Decimal(state["total_amount"]), Decimal("0"))
+        self.assertEqual(state["record_count"], 0)
+
+        self.assertEqual(self._call(RecoveryStopView, "post").status_code, 200)
+
+    def test_records_list_is_paginated_newest_first(self):
+        start_recovery(user=self.admin)
+        for amount in ("10", "20", "30"):
+            self._pay(self.inv_a, amount)
+        data = self._call(
+            RecoveryRecordListView, url="/billing/recovery/records/", data=None,
+        ).data
+        self.assertEqual(data["count"], 3)
+        self.assertEqual([Decimal(r["amount"]) for r in data["results"]],
+                         [Decimal("30"), Decimal("20"), Decimal("10")])
+
+        cache.clear()
+        request = self.factory.get("/billing/recovery/records/", {"page_size": 2})
+        force_authenticate(request, user=self.admin)
+        paged = RecoveryRecordListView.as_view()(request)
+        paged.render()
+        self.assertEqual(paged.data["total_pages"], 2)
+        self.assertEqual(len(paged.data["results"]), 2)
+
+    # ---- permissions -------------------------------------------------------
+
+    def test_normal_user_is_forbidden_everywhere(self):
+        normal = make_normal_user()
+        for view, method, url in [
+            (RecoveryStateView, "get", "/billing/recovery/"),
+            (RecoveryStartView, "post", "/billing/recovery/start/"),
+            (RecoveryStopView, "post", "/billing/recovery/stop/"),
+            (RecoveryRecordListView, "get", "/billing/recovery/records/"),
+        ]:
+            with self.subTest(url=url):
+                self.assertEqual(self._call(view, method, user=normal, url=url).status_code, 403)
+        self.assertFalse(self._state().is_active)
+
+    def test_unauthenticated_is_rejected(self):
+        request = self.factory.get("/billing/recovery/")
+        response = RecoveryStateView.as_view()(request)
+        self.assertIn(response.status_code, (401, 403))
+
+    # ---- performance -------------------------------------------------------
+
+    def _recovery_statements(self, sql_list):
+        return [q["sql"] for q in sql_list if "billing_recovery" in q["sql"]]
+
+    def test_create_payment_touches_recovery_once_when_off_and_twice_when_on(self):
+        with CaptureQueriesContext(connection) as off:
+            self._pay(self.inv_a, "10")
+        off_sql = self._recovery_statements(off.captured_queries)
+        self.assertEqual(len(off_sql), 1)                      # the conditional UPDATE only
+        self.assertTrue(off_sql[0].lstrip().upper().startswith("UPDATE"))
+
+        start_recovery(user=self.admin)
+        with CaptureQueriesContext(connection) as on:
+            self._pay(self.inv_a, "10")
+        on_sql = self._recovery_statements(on.captured_queries)
+        self.assertEqual(len(on_sql), 2)                       # UPDATE + INSERT
+        self.assertTrue(on_sql[0].lstrip().upper().startswith("UPDATE"))
+        self.assertTrue(on_sql[1].lstrip().upper().startswith("INSERT"))
+
+    def test_read_endpoints_use_a_small_fixed_number_of_queries(self):
+        start_recovery(user=self.admin)
+        self._pay(self.inv_a, "10")
+
+        def count(view, url):
+            cache.clear()
+            request = self.factory.get(url)
+            force_authenticate(request, user=self.admin)
+            with CaptureQueriesContext(connection) as ctx:
+                response = view.as_view()(request)
+                response.render()
+            self.assertEqual(response.status_code, 200)
+            return len(ctx.captured_queries)
+
+        self.assertLessEqual(count(RecoveryStateView, "/billing/recovery/"), 2)
+        baseline = count(RecoveryRecordListView, "/billing/recovery/records/")
+        for _ in range(4):
+            self._pay(self.inv_a, "10")
+        grown = count(RecoveryRecordListView, "/billing/recovery/records/")
+        self.assertEqual(baseline, grown)
+        self.assertLessEqual(grown, 3)
 
 
 class BillingPermissionTests(BillingTestBase):

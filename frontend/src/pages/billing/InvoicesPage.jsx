@@ -6,6 +6,7 @@ import { useToast } from '../../context/ToastContext';
 import { billingApi } from '../../services/billingApi';
 import InvoiceTable from '../../components/billing/InvoiceTable';
 import InvoiceFilterBar from '../../components/billing/InvoiceFilterBar';
+import InvoiceSummaryCard from '../../components/billing/InvoiceSummaryCard';
 import ExtendDueDateModal from '../../components/billing/ExtendDueDateModal';
 import Tabs from '../../components/ui/Tabs';
 import SearchBar from '../../components/ui/SearchBar';
@@ -15,6 +16,7 @@ import Pagination from '../../components/ui/Pagination';
 import InlineAlert from '../../components/ui/InlineAlert';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import { usePaginatedList } from '../../hooks/usePaginatedList';
+import { useInvoicesSummary } from '../../hooks/useBilling';
 import { extractErrorMessage } from '../../utils/errorMessage';
 
 const InvoicesPage = () => {
@@ -50,6 +52,14 @@ const InvoicesPage = () => {
         data: invoices, meta, page, setPage, loading, initialLoading, error,
         filters: filterValues, setFilters: setFilterValues, refetch: fetchInvoices,
     } = usePaginatedList(fetchInvoicesPage, {}, 25, [activeTab, searchTerm]);
+
+    // Filtered count + total outstanding — fetched independently of the list,
+    // and deliberately NOT part of initialLoading / the table's loading swap,
+    // so a slow summary request can never delay or blank the invoice rows.
+    const {
+        data: summary, loading: summaryLoading, error: summaryError,
+        active: summaryActive, refetch: refetchSummary,
+    } = useInvoicesSummary(activeTab, filterValues, searchTerm);
 
     const tabs = [
         { value: 'all', label: 'All Invoices' },
@@ -94,6 +104,7 @@ const InvoicesPage = () => {
             toast.success('Draft invoice deleted.');
             setDeleteTarget(null);
             fetchInvoices();
+            refetchSummary();
         } catch (err) {
             toast.error(extractErrorMessage(err, 'Failed to delete invoice.'));
         } finally {
@@ -113,6 +124,7 @@ const InvoicesPage = () => {
             toast.success('Invoice confirmed.');
             setConfirmTarget(null);
             fetchInvoices();
+            refetchSummary();
         } catch (err) {
             toast.error(extractErrorMessage(err, 'Failed to confirm invoice.'));
         } finally {
@@ -168,6 +180,7 @@ const InvoicesPage = () => {
             toast.success('Due date updated.');
             setDueDateInvoice(null);
             fetchInvoices();
+            refetchSummary();
         } finally {
             setDueDateSaving(false);
         }
@@ -233,6 +246,15 @@ const InvoicesPage = () => {
             </div>
 
             {error && <InlineAlert variant="error" message={error} onRetry={fetchInvoices} />}
+
+            {summaryActive && (
+                <InvoiceSummaryCard
+                    summary={summary}
+                    loading={summaryLoading}
+                    error={summaryError}
+                    onRetry={refetchSummary}
+                />
+            )}
 
             {loading && !initialLoading ? (
                 <div className="flex items-center justify-center py-16">

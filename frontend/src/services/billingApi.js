@@ -40,6 +40,12 @@ export const billingApi = {
             const query = new URLSearchParams(params).toString();
             return api.get(`/billing/invoices/due/${query ? `?${query}` : ''}`);
         },
+        // Filtered count + total outstanding for a tab (scope: all | drafts |
+        // confirmed | outstanding | due) — same filter params as that tab's list.
+        getSummary: (params = {}) => {
+            const query = new URLSearchParams(params).toString();
+            return api.get(`/billing/invoices/summary/${query ? `?${query}` : ''}`);
+        },
         updateDueDate: (id, payment_due_date) =>
             api.patch(`/billing/invoices/${id}/due-date/`, { payment_due_date }),
         getSearch: (params = {}) => {

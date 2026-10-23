@@ -1,4 +1,5 @@
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from payment_methods.mixins import AllocationsListMixin
@@ -6,9 +7,11 @@ from payment_methods.mixins import AllocationsListMixin
 from .models import Invoice
 from .permissions import IsAdminOrSuperuser, IsAdminOrSuperuserOrReadOnly, IsAuthenticated
 from .selectors import (
+    INVOICE_SUMMARY_SCOPES,
     get_all_customers,
     get_customer_by_id,
     get_filtered_invoices,
+    get_invoices_summary,
     get_invoice_by_id,
     get_invoice_item_with_allocations_by_id,
     get_payment_by_id,
@@ -27,6 +30,7 @@ from .serializers import (
     InvoiceDueDateUpdateSerializer,
     InvoiceItemReadSerializer,
     InvoiceReadSerializer,
+    InvoiceSummarySerializer,
     InvoiceUpdateSerializer,
     PaymentReadSerializer,
     PaymentWriteSerializer,
@@ -178,6 +182,24 @@ class InvoiceListCreateView(generics.ListCreateAPIView):
         # which would N+1 (product + shelf_allocations per item) here.
         invoice = get_invoice_by_id(invoice.id)
         return Response(InvoiceReadSerializer(invoice, context={"request": request}).data, status=status.HTTP_201_CREATED)
+
+
+class InvoiceSummaryView(generics.RetrieveAPIView):
+    """
+    GET /billing/invoices/summary/?scope=all|drafts|confirmed|outstanding|due
+    Count + total outstanding (SUM of credit_outstanding) of the invoices the
+    matching tab's list endpoint returns for the same filter params. Separate
+    from the lists so the page can render rows without waiting on it.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class   = InvoiceSummarySerializer
+
+    def get_object(self):
+        p = self.request.query_params
+        scope = p.get("scope", "all")
+        if scope not in INVOICE_SUMMARY_SCOPES:
+            raise ValidationError({"scope": f"Must be one of: {', '.join(INVOICE_SUMMARY_SCOPES)}."})
+        return get_invoices_summary(scope=scope, params=p)
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,7 @@
-from django.db.models import Prefetch, Q, QuerySet
+from decimal import Decimal
+
+from django.db.models import Count, Prefetch, Q, QuerySet, Sum
+from django.db.models.functions import Coalesce
 from django.shortcuts import get_object_or_404
 
 from backend.search import search_q
@@ -446,7 +449,8 @@ def _clean(value):
     return stripped if stripped else None
 
 
-def get_filtered_invoices(
+def _apply_invoice_filters(
+    qs,
     *,
     status         : str  = None,
     customer_id    : int  = None,
@@ -464,6 +468,10 @@ def get_filtered_invoices(
     sales_man_id   : int  = None,
 ) -> "QuerySet":
     """
+    Filter chain behind get_filtered_invoices() (the heavy list queryset) and
+    get_invoices_summary() (a lean, join-free queryset) — one place, so the
+    list and its summary can never disagree on filter semantics.
+
     Master invoice filter selector — all list views use this, including the
     Due Invoices tab (due_only=True): confirmed, still-outstanding invoices
     whose payment_due_date has passed. payment_due_date is a plain DateField
@@ -476,8 +484,6 @@ def get_filtered_invoices(
     Every parameter is optional; combining them narrows results.
     _clean() ensures empty strings from query params don't slip through.
     """
-    qs = _invoice_qs().filter(is_deleted=False)
-
     if due_only:
         from django.utils import timezone
         # Not just status=CONFIRMED — a partially-returned invoice (status=
@@ -526,6 +532,71 @@ def get_filtered_invoices(
     return qs
 
 
+def get_filtered_invoices(
+    *,
+    status         : str  = None,
+    customer_id    : int  = None,
+    customer_name  : str  = None,
+    customer_code  : str  = None,
+    bill_number    : str  = None,
+    date           : str  = None,
+    date_from      : str  = None,
+    date_to        : str  = None,
+    payment_status : str  = None,
+    min_amount     : str  = None,
+    max_amount     : str  = None,
+    due_only       : bool = False,
+    outstanding_only: bool = False,
+    sales_man_id   : int  = None,
+) -> "QuerySet":
+    """
+    Master invoice filter selector for the list views — see
+    _apply_invoice_filters() for the filter semantics.
+    """
+    return _apply_invoice_filters(
+        _invoice_qs().filter(is_deleted=False),
+        status=status, customer_id=customer_id, customer_name=customer_name,
+        customer_code=customer_code, bill_number=bill_number, date=date,
+        date_from=date_from, date_to=date_to, payment_status=payment_status,
+        min_amount=min_amount, max_amount=max_amount, due_only=due_only,
+        outstanding_only=outstanding_only, sales_man_id=sales_man_id,
+    )
+
+
+def _apply_outstanding_filters(
+    qs,
+    *,
+    customer_name  : str = None,
+    customer_code  : str = None,
+    payment_status : str = None,
+    date_from      : str = None,
+    date_to        : str = None,
+    min_outstanding: str = None,
+    max_outstanding: str = None,
+) -> "QuerySet":
+    """Filter chain behind get_all_outstanding_invoices() and the summary's
+    "outstanding" scope. `qs` must already be the credit_outstanding > 0,
+    non-draft, non-deleted base."""
+    if _clean(customer_name):
+        qs = qs.filter(search_q(_clean(customer_name), "customer__name"))
+    if _clean(customer_code):
+        qs = qs.filter(search_q(_clean(customer_code), "customer__code"))
+    if _clean(payment_status):
+        qs = qs.filter(payment_status=_clean(payment_status))
+    if _clean(date_from):
+        start = _day_start(_clean(date_from))
+        qs = qs.filter(created_at__gte=start) if start else qs.filter(created_at__date__gte=_clean(date_from))
+    if _clean(date_to):
+        end = _next_day_start(_clean(date_to))
+        qs = qs.filter(created_at__lt=end) if end else qs.filter(created_at__date__lte=_clean(date_to))
+    if _clean(min_outstanding):
+        qs = qs.filter(credit_outstanding__gte=_clean(min_outstanding))
+    if _clean(max_outstanding):
+        qs = qs.filter(credit_outstanding__lte=_clean(max_outstanding))
+
+    return qs
+
+
 def get_all_outstanding_invoices(
     *,
     customer_name  : str = None,
@@ -554,21 +625,66 @@ def get_all_outstanding_invoices(
         credit_outstanding__gt=0,
     ).exclude(status=Invoice.Status.DRAFT)
 
-    if _clean(customer_name):
-        qs = qs.filter(search_q(_clean(customer_name), "customer__name"))
-    if _clean(customer_code):
-        qs = qs.filter(search_q(_clean(customer_code), "customer__code"))
-    if _clean(payment_status):
-        qs = qs.filter(payment_status=_clean(payment_status))
-    if _clean(date_from):
-        start = _day_start(_clean(date_from))
-        qs = qs.filter(created_at__gte=start) if start else qs.filter(created_at__date__gte=_clean(date_from))
-    if _clean(date_to):
-        end = _next_day_start(_clean(date_to))
-        qs = qs.filter(created_at__lt=end) if end else qs.filter(created_at__date__lte=_clean(date_to))
-    if _clean(min_outstanding):
-        qs = qs.filter(credit_outstanding__gte=_clean(min_outstanding))
-    if _clean(max_outstanding):
-        qs = qs.filter(credit_outstanding__lte=_clean(max_outstanding))
-
+    qs = _apply_outstanding_filters(
+        qs,
+        customer_name=customer_name, customer_code=customer_code,
+        payment_status=payment_status, date_from=date_from, date_to=date_to,
+        min_outstanding=min_outstanding, max_outstanding=max_outstanding,
+    )
     return qs.order_by("-credit_outstanding")
+
+
+# ---------------------------------------------------------------------------
+# Invoice summary (filtered count + total outstanding)
+# ---------------------------------------------------------------------------
+
+INVOICE_SUMMARY_SCOPES = ("all", "drafts", "confirmed", "outstanding", "due")
+
+# Query params shared by every tab's list view.
+_COMMON_INVOICE_PARAMS = (
+    "customer_name", "customer_code", "bill_number", "date", "date_from",
+    "date_to", "payment_status", "min_amount", "max_amount",
+)
+
+# scope -> (fixed kwargs that tab's list view forces, query params that list
+# view actually forwards to get_filtered_invoices). Mirrors the list views in
+# views.py EXACTLY (e.g. Drafts/Confirmed ignore a ?status= param, Confirmed
+# and Outstanding ignore ?customer_id=) so the summary always describes the
+# rows the table shows — billing.tests asserts parity per scope.
+_INVOICE_SUMMARY_SCOPES = {
+    "all"      : ({},                                  ("status", "customer_id") + _COMMON_INVOICE_PARAMS),
+    "drafts"   : ({"status": Invoice.Status.DRAFT},    ("customer_id",) + _COMMON_INVOICE_PARAMS),
+    "confirmed": ({"status": Invoice.Status.CONFIRMED}, _COMMON_INVOICE_PARAMS),
+    "due"      : ({"due_only": True},                  ("customer_id",) + _COMMON_INVOICE_PARAMS),
+}
+
+_OUTSTANDING_SUMMARY_PARAMS = (
+    "customer_name", "customer_code", "payment_status", "date_from",
+    "date_to", "min_outstanding", "max_outstanding",
+)
+
+
+def get_invoices_summary(*, scope: str, params) -> dict:
+    """
+    Count + SUM(credit_outstanding) of the invoices the given tab's list view
+    would return for `params` (a query-param mapping), in ONE aggregate query
+    (consistent snapshot). Built on a lean queryset — no select_related /
+    prefetch / ordering — because only the aggregate is needed.
+    """
+    base = Invoice.objects.filter(is_deleted=False)
+
+    if scope == "outstanding":
+        qs = _apply_outstanding_filters(
+            base.filter(credit_outstanding__gt=0).exclude(status=Invoice.Status.DRAFT),
+            **{key: params.get(key) for key in _OUTSTANDING_SUMMARY_PARAMS},
+        )
+    else:
+        fixed, allowed = _INVOICE_SUMMARY_SCOPES[scope]
+        kwargs = {key: params.get(key) for key in allowed}
+        kwargs.update(fixed)
+        qs = _apply_invoice_filters(base, **kwargs)
+
+    return qs.aggregate(
+        count=Count("id"),
+        total_outstanding=Coalesce(Sum("credit_outstanding"), Decimal("0")),
+    )

@@ -2,6 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
+from django.core.cache import cache
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
@@ -27,10 +28,11 @@ from .services import (
     update_invoice_items, update_return_items,
 )
 from .views import (
-    AllInvoicePaymentsView, CustomerListCreateView, DraftInvoiceListView,
+    AllInvoicePaymentsView, AllOutstandingInvoicesView, ConfirmedInvoiceListView,
+    CustomerListCreateView, DraftInvoiceListView,
     DueInvoiceListView, InvoiceAutoAllocateShelvesView, InvoiceConfirmView,
     InvoiceDueDateUpdateView, InvoiceListCreateView,
-    InvoicePaymentSummaryView, InvoiceRetrieveUpdateDestroyView,
+    InvoicePaymentSummaryView, InvoiceRetrieveUpdateDestroyView, InvoiceSummaryView,
     PaymentListCreateView, ReturnAcceptView, ReturnListCreateView,
     ReturnRetrieveUpdateDestroyView,
 )
@@ -1034,6 +1036,170 @@ class InvoiceDateFilterTests(BillingTestBase):
         self.assertEqual(self.bill_numbers(date_from=today), {self.new_invoice.bill_number})
         self.assertEqual(self.bill_numbers(date_to=cutoff), {self.old_invoice.bill_number})
         self.assertEqual(self.bill_numbers(date=today), {self.new_invoice.bill_number})
+
+
+class InvoiceSummaryTests(BillingTestBase):
+    """GET /billing/invoices/summary/ — filtered count + SUM(credit_outstanding)
+    per tab ("scope"). Must agree exactly with that tab's paginated list for
+    the same params (including the quirks of each list view), in ONE query."""
+
+    # scope -> the list view serving that tab
+    LIST_VIEWS = {
+        "all": InvoiceListCreateView,
+        "drafts": DraftInvoiceListView,
+        "confirmed": ConfirmedInvoiceListView,
+        "outstanding": AllOutstandingInvoicesView,
+        "due": DueInvoiceListView,
+    }
+
+    def setUp(self):
+        super().setUp()
+        self.shop = create_customer(name="Corner Shop", code="CS", address="Side St", user=self.admin)
+        self.product = self.make_stocked_product(stock=50)
+        self.today = timezone.localtime(timezone.now()).date()
+        self.yesterday = self.today - timedelta(days=1)
+
+        # 400 unpaid (A)
+        self.inv_unpaid = self._confirmed(self.customer, 4)
+        # 200 with 50 paid -> 150 outstanding, partial (A)
+        self.inv_partial = self._confirmed(self.customer, 2)
+        create_payment(
+            invoice_id=self.inv_partial.id, amount=Decimal("50"),
+            method_allocations=self.cash_split("50"), payment_date=self.today, user=self.admin,
+        )
+        # 100 fully paid -> 0 outstanding (B)
+        self.inv_paid = self._confirmed(self.shop, 1)
+        create_payment(
+            invoice_id=self.inv_paid.id, amount=Decimal("100"),
+            method_allocations=self.cash_split("100"), payment_date=self.today, user=self.admin,
+        )
+        # 300 overdue (B)
+        self.inv_overdue = self._confirmed(self.shop, 3, due=self.yesterday)
+        # draft (A) — carries no outstanding yet
+        self.inv_draft = create_invoice(
+            customer_id=self.customer.id,
+            items=[{"product_id": self.product.id, "quantity": 1}], user=self.admin,
+        )
+
+    def _confirmed(self, customer, quantity, due=None):
+        invoice = create_invoice(
+            customer_id=customer.id,
+            items=[{"product_id": self.product.id, "quantity": quantity}],
+            payment_due_date=due, user=self.admin,
+        )
+        self.allocate_invoice_items(invoice)
+        return confirm_invoice(invoice_id=invoice.id, user=self.admin)
+
+    def tearDown(self):
+        # This class fires hundreds of requests as one user; DRF's per-user
+        # throttle (120/min, shared locmem cache) would otherwise 429 both
+        # this class and every test that runs after it.
+        cache.clear()
+        super().tearDown()
+
+    def _summary(self, scope, params=None, user=None):
+        cache.clear()
+        request = self.factory.get("/billing/invoices/summary/", {"scope": scope, **(params or {})})
+        force_authenticate(request, user=user or self.admin)
+        response = InvoiceSummaryView.as_view()(request)
+        response.render()
+        return response
+
+    def _list_totals(self, scope, params):
+        """(count, SUM(credit_outstanding)) across EVERY page of the tab's list."""
+        total, page = Decimal("0"), 1
+        while True:
+            cache.clear()
+            request = self.factory.get(
+                "/billing/invoices/", {**params, "page": page, "page_size": 2},
+            )
+            force_authenticate(request, user=self.admin)
+            response = self.LIST_VIEWS[scope].as_view()(request)
+            response.render()
+            self.assertEqual(response.status_code, 200)
+            data = response.data
+            total += sum(Decimal(r["credit_outstanding"]) for r in data["results"])
+            if page >= data["total_pages"]:
+                return data["count"], total
+            page += 1
+
+    def test_known_values_per_scope(self):
+        expected = {
+            "all": (5, "850"),
+            "drafts": (1, "0"),
+            "confirmed": (4, "850"),
+            "outstanding": (3, "850"),
+            "due": (1, "300"),
+        }
+        for scope, (count, total) in expected.items():
+            with self.subTest(scope=scope):
+                response = self._summary(scope)
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.data["count"], count)
+                self.assertEqual(Decimal(response.data["total_outstanding"]), Decimal(total))
+
+    def test_matches_each_tabs_list_exactly(self):
+        param_sets = [
+            {},
+            {"customer_name": "Corner"},
+            {"customer_code": "BM"},
+            {"payment_status": "partial"},
+            {"payment_status": "unpaid"},
+            {"status": "confirmed"},
+            {"status": "draft"},
+            {"min_amount": "250"},
+            {"max_amount": "250"},
+            {"bill_number": self.inv_unpaid.bill_number},
+            {"customer_id": self.shop.id},
+            {"date_from": self.today.isoformat()},
+            {"date_to": self.yesterday.isoformat()},
+            {"min_outstanding": "200"},
+            {"max_outstanding": "200"},
+            {"customer_name": "Big", "payment_status": "partial"},
+        ]
+        for scope in self.LIST_VIEWS:
+            for params in param_sets:
+                with self.subTest(scope=scope, params=params):
+                    response = self._summary(scope, params)
+                    self.assertEqual(response.status_code, 200)
+                    count, total = self._list_totals(scope, params)
+                    self.assertEqual(response.data["count"], count)
+                    self.assertEqual(Decimal(response.data["total_outstanding"]), total)
+
+    def test_excludes_soft_deleted(self):
+        delete_invoice(invoice_id=self.inv_draft.id, user=self.admin)
+        response = self._summary("all")
+        self.assertEqual(response.data["count"], 4)
+        self.assertEqual(Decimal(response.data["total_outstanding"]), Decimal("850"))
+
+    def test_empty_result_is_zero(self):
+        response = self._summary("all", {"customer_name": "no-such-customer-xyz"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 0)
+        self.assertEqual(Decimal(response.data["total_outstanding"]), Decimal("0"))
+
+    def test_invalid_scope_is_400(self):
+        self.assertEqual(self._summary("bogus").status_code, 400)
+
+    def test_unauthenticated_rejected(self):
+        request = self.factory.get("/billing/invoices/summary/", {"scope": "all"})
+        response = InvoiceSummaryView.as_view()(request)
+        self.assertIn(response.status_code, (401, 403))
+
+    def test_single_query_per_scope(self):
+        for scope in self.LIST_VIEWS:
+            with self.subTest(scope=scope):
+                request = self.factory.get(
+                    "/billing/invoices/summary/",
+                    {"scope": scope, "customer_name": "o", "bill_number": "INV"},
+                )
+                force_authenticate(request, user=self.admin)
+                cache.clear()
+                with CaptureQueriesContext(connection) as ctx:
+                    response = InvoiceSummaryView.as_view()(request)
+                    response.render()
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(len(ctx.captured_queries), 1)
 
 
 class BillingPermissionTests(BillingTestBase):

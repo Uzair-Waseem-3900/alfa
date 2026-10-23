@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { billingApi } from '../services/billingApi';
+import { extractErrorMessage } from '../utils/errorMessage';
 import { usePaginatedList } from './usePaginatedList';
 
 // Generic CRUD hook for billing resources — thin wrapper around usePaginatedList.
@@ -79,6 +80,56 @@ export const useBillingCRUD = (service, initialFilters = {}) => {
         update,
         delete: deleteItem,
     };
+};
+
+const isFilterValueSet = (v) => v !== '' && v !== null && v !== undefined;
+
+// Filtered count + total outstanding for the Invoices page's current tab.
+// `filters` is the list hook's filters object and `searchTerm` the page's
+// search box (the page sends it to the list as `bill_number`, so it's merged
+// the same way here). Fetches independently of the list so rows render
+// without waiting on it, and only runs while a filter/search is active —
+// `active` tells the page whether to show the card at all.
+export const useInvoicesSummary = (scope, filters, searchTerm) => {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState(null);
+    // Ignore a slow earlier response arriving after a newer request started.
+    const requestId = useRef(0);
+
+    const cleaned = Object.fromEntries(
+        Object.entries(filters || {}).filter(([, v]) => isFilterValueSet(v))
+    );
+    if (searchTerm) cleaned.bill_number = searchTerm;
+    const active = Object.keys(cleaned).length > 0;
+    const requestKey = JSON.stringify({ scope, params: cleaned });
+
+    const fetchSummary = useCallback(async () => {
+        const id = ++requestId.current;
+        if (!active) {
+            setData(null);
+            setError(null);
+            setLoading(false);
+            return;
+        }
+        setLoading(true);
+        setError(null);
+        try {
+            const { scope: s, params } = JSON.parse(requestKey);
+            const result = await billingApi.invoices.getSummary({ ...params, scope: s });
+            if (id === requestId.current) setData(result);
+        } catch (err) {
+            if (id === requestId.current) setError(extractErrorMessage(err, 'Failed to load invoice totals'));
+        } finally {
+            if (id === requestId.current) setLoading(false);
+        }
+    }, [requestKey, active]);
+
+    useEffect(() => {
+        fetchSummary();
+    }, [fetchSummary]);
+
+    return { data, loading, error, active, refetch: fetchSummary };
 };
 
 // Hook for invoice detail with payment summary

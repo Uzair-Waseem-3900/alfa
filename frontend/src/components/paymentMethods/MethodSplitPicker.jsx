@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import PropTypes from 'prop-types';
 import { Plus, Trash2 } from 'lucide-react';
 import { usePaymentMethods } from '../../hooks/usePaymentMethods';
@@ -13,6 +13,9 @@ const toNumber = (v) => {
 };
 
 const fmt = (v) => toNumber(v).toFixed(2);
+
+// Row amount for a form total — '' while there's no usable total yet.
+const amountFor = (total) => (toNumber(total) > 0 ? String(total) : '');
 
 // Pure helpers other forms/pages can reuse to gate their own submit button
 // without re-deriving the balance math (e.g. `disabled={!isSplitBalanced(total, splits)}`).
@@ -31,15 +34,49 @@ export const isSplitBalanced = (totalAmount, value) =>
 const MethodSplitPicker = ({ totalAmount, value, onChange, error, className = '' }) => {
     const { data: methods, loading, error: methodsError, refetch } = usePaymentMethods();
 
+    // Cash is the seeded, protected account (it can't be renamed or deleted),
+    // so it's found by that flag rather than by name.
+    const cashId = (methods || []).find((m) => m.is_protected)?.id;
+
+    // While true, the single row's amount keeps tracking the form's total —
+    // until the user types in the amount box or splits across several methods.
+    const followTotal = useRef(true);
+    // The Cash default is applied once per fresh row, never over a user's choice.
+    const cashApplied = useRef(false);
+
     // Parent forms typically start with value=[] before the user picks
     // anything — seed a single blank row so there's always at least one
     // row to edit, keeping the array-shape contract (never a truly empty split).
+    // A parent resetting back to [] (e.g. after saving) re-arms the defaults.
     useEffect(() => {
         if (value.length === 0) {
-            onChange([{ payment_method: '', amount: totalAmount ? String(totalAmount) : '' }]);
+            followTotal.current = true;
+            cashApplied.current = false;
+            onChange([{ payment_method: '', amount: amountFor(totalAmount) }]);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [value.length]);
+
+    // Defaults for the single row, patched in ONE onChange so the two never
+    // overwrite each other: Cash as the method (once the methods have loaded)
+    // and an amount that follows the form total.
+    useEffect(() => {
+        if (value.length !== 1) return;
+        const row = value[0];
+        const patch = {};
+        if (!cashApplied.current && cashId !== undefined) {
+            cashApplied.current = true;
+            if (!row.payment_method) patch.payment_method = cashId;
+        }
+        if (followTotal.current) {
+            const next = amountFor(totalAmount);
+            if (String(row.amount ?? '') !== next) patch.amount = next;
+        }
+        if (Object.keys(patch).length > 0) {
+            onChange([{ ...row, ...patch }]);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value, cashId, totalAmount]);
 
     const rows = value.length > 0 ? value : [{ payment_method: '', amount: '' }];
 
@@ -47,10 +84,14 @@ const MethodSplitPicker = ({ totalAmount, value, onChange, error, className = ''
     const isBalanced = isSplitBalanced(totalAmount, rows);
 
     const updateRow = (index, patch) => {
+        // A hand-typed amount takes over from the auto-filled total.
+        if ('amount' in patch) followTotal.current = false;
         onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
     };
 
     const addRow = () => {
+        // Splitting across methods: the user allocates the amounts themselves.
+        followTotal.current = false;
         onChange([...rows, { payment_method: '', amount: '' }]);
     };
 

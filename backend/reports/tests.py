@@ -89,13 +89,14 @@ class ReportsTestBase(TestCase):
 class InventoryValuationAvgCostTests(ReportsTestBase):
     """
     avg_unit_cost: Inventory.avg_unit_cost, a frozen moving-average updated
-    only by purchases (fixed 2026-09-14). total_value: the TRUE live FIFO
+    only by purchases and accepted purchase returns (fixed 2026-09-14,
+    extended to purchase returns 2026-09-15). total_value: the TRUE live FIFO
     valuation (reverted 2026-09-14 after making it WAC-derived broke the
     Balance Sheet's reconciliation with FIFO-based COGS-at-sale — see
     get_inventory_valuation_report_data's docstring). The two figures agree
     only when a product's true remaining-batch cost hasn't drifted from its
     average — see test_total_value_diverges_from_avg_cost_after_a_return
-    for the case where they don't.
+    for the case where they don't (a sale after a return).
     """
 
     def test_moving_average_across_two_purchases_at_different_costs(self):
@@ -135,6 +136,11 @@ class InventoryValuationAvgCostTests(ReportsTestBase):
         Proves total_value is the true live FIFO valuation, NOT
         avg_unit_cost * quantity_on_hand — the exact scenario that broke the
         Balance Sheet when total_value was briefly WAC-derived (2026-09-14).
+
+        Since 2026-09-15 an accepted purchase return moves avg_unit_cost by
+        the returned batch's own cost, so a return alone keeps the two
+        figures aligned (asserted below). They diverge once a SALE follows:
+        FIFO consumes the cheap batch, but sales never touch the average.
         """
         from purchases.models import Inventory
         from reports.selectors import get_inventory_valuation_report_data
@@ -155,8 +161,9 @@ class InventoryValuationAvgCostTests(ReportsTestBase):
         confirm_purchase_order(order_id=order_b.id, user=self.admin)
         # avg = 60, qty = 20, true total_value = 10*50 + 10*70 = 1200
 
-        # Return 4 units from batch A (cost 50) — avg_unit_cost stays 60,
-        # but the TRUE remaining value drops by exactly 4*50=200.
+        # Return 4 units from batch A (cost 50) — the TRUE remaining value
+        # drops by exactly 4*50=200, and avg_unit_cost moves by that same
+        # batch's own cost: (60*20 - 50*4) / 16 = 62.5.
         item_a = order_a.items.first()
         ret = create_purchase_return(
             order_id=order_a.id,
@@ -172,12 +179,27 @@ class InventoryValuationAvgCostTests(ReportsTestBase):
         accept_purchase_return(return_id=ret.id, user=self.admin)
 
         inv = Inventory.objects.get(product=product)
-        self.assertEqual(inv.avg_unit_cost, Decimal("60.0000"))  # frozen, unchanged
+        self.assertEqual(inv.avg_unit_cost, Decimal("62.5000"))  # moved by the returned batch's cost
         self.assertEqual(inv.quantity, 16)
 
         row = next(r for r in get_inventory_valuation_report_data() if r["product_id"] == product.id)
-        self.assertEqual(row["avg_unit_cost"], Decimal("60.0000"))
+        self.assertEqual(row["avg_unit_cost"], Decimal("62.5000"))
         self.assertEqual(row["total_value"], Decimal("1000.0000"))  # 6*50 + 10*70, true FIFO
+        # A return reverses at the batch's own cost, so here the two agree.
+        self.assertEqual(row["total_value"], row["quantity_on_hand"] * row["avg_unit_cost"])
+
+        # Now SELL 4 units: FIFO takes them from the cheap (50) batch, but a
+        # sale never moves avg_unit_cost (it stays 62.5). True FIFO value is
+        # 2*50 + 10*70 = 800; avg*qty would claim 12*62.5 = 750.
+        self.make_confirmed_invoice(product, quantity=4)
+
+        inv.refresh_from_db()
+        self.assertEqual(inv.avg_unit_cost, Decimal("62.5000"))  # sales are neutral
+        self.assertEqual(inv.quantity, 12)
+
+        row = next(r for r in get_inventory_valuation_report_data() if r["product_id"] == product.id)
+        self.assertEqual(row["avg_unit_cost"], Decimal("62.5000"))
+        self.assertEqual(row["total_value"], Decimal("800.0000"))  # true FIFO
         # The identity does NOT hold here — proves total_value is genuinely
         # independent of avg_unit_cost, not silently derived from it.
         self.assertNotEqual(row["total_value"], row["quantity_on_hand"] * row["avg_unit_cost"])
@@ -250,10 +272,14 @@ class BackfillInventoryAvgCostTests(ReportsTestBase):
     def test_backfill_corrects_a_snapshot_already_skewed_by_a_past_return(self):
         """
         The whole reason this command replays full history instead of
-        seeding from today's live batch-walk: a purchase return that
-        already happened (before this fix shipped) has already skewed
-        which batch has how much remaining_quantity, so "today's live
-        snapshot" is the WRONG number for any product with return history.
+        seeding from today's live batch-walk: a return (and a sale) that
+        already happened has already changed which batch has how much
+        remaining_quantity, so "today's live snapshot" is the WRONG number
+        for any product with that history.
+
+        Since 2026-09-15 the replay counts a purchase return at the
+        returned batch's own cost (like the live formula does), and still
+        treats sales as neutral — see backfill_inventory_avg_cost.
         """
         from django.core.management import call_command
         from purchases.models import Inventory
@@ -276,18 +302,25 @@ class BackfillInventoryAvgCostTests(ReportsTestBase):
             )
         accept_purchase_return(return_id=ret.id, user=self.admin)
 
+        # Then SELL 4 units: FIFO takes them from the cheap batch (remaining
+        # becomes 2@50 + 10@70, qty 12), but a sale never moves the average.
+        self.make_confirmed_invoice(product, quantity=4)
+
         # Simulate this row predating the fix: avg_unit_cost never seeded.
         Inventory.objects.filter(product=product).update(avg_unit_cost=0)
 
         call_command("backfill_inventory_avg_cost", verbosity=0)
 
         reconstructed = Inventory.objects.get(product=product).avg_unit_cost
-        # True historical average (purchases only, return never counted): 60.
-        self.assertEqual(reconstructed, Decimal("60.0000"))
+        # True historical average: both purchases, then the return at ITS
+        # batch's cost — (60*20 - 50*4) / 16 = 62.5 — and the sale neutral.
+        self.assertEqual(reconstructed, Decimal("62.5000"))
         # What the OLD (wrong) "seed from today's live snapshot" approach
         # would have produced instead — proves this isn't a no-op scenario:
-        # remaining batches are 6@50 + 10@70 = 300+700=1000, qty=16 -> 62.5.
-        self.assertNotEqual(reconstructed, Decimal("62.5000"))
+        # remaining batches are 2@50 + 10@70 = 100+700=800, qty=12 -> 66.6667.
+        self.assertNotEqual(reconstructed, Decimal("66.6667"))
+        # And the return really was counted (ignoring it would leave 60).
+        self.assertNotEqual(reconstructed, Decimal("60.0000"))
 
     def make_product_with_two_cost_batches(self):
         """Returns (product, order_a) — order_a is the first (50-cost) PO,

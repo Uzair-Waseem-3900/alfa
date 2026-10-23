@@ -17,6 +17,10 @@ const formatAmount = (value) => {
 // Start/Stop Recovery controls + running total. Fetches its own status, so it
 // never blocks or delays the invoice list around it. Render for admin and
 // superuser only (the backend enforces it too).
+//
+// Mobile-first: everything stacks in one column on phones (full-width,
+// 44px-tall buttons; the total gets its own row so a large figure never
+// overflows), and opens up to side-by-side layouts from `sm`/`lg` upward.
 const RecoveryPanel = () => {
     const { toast } = useToast();
     const { data, loading, error, mutating, refetch, start, stop } = useRecovery();
@@ -57,42 +61,62 @@ const RecoveryPanel = () => {
                 <InlineAlert variant="error" message={error} onRetry={refetch} />
             ) : loading && !data ? (
                 <div className="animate-pulse space-y-2" aria-busy="true" aria-label="Loading recovery status">
-                    <div className="h-3 w-32 rounded bg-neutral-200" />
-                    <div className="h-7 w-48 rounded bg-neutral-200" />
+                    <div className="h-3 w-32 max-w-full rounded bg-neutral-200" />
+                    <div className="h-7 w-48 max-w-full rounded bg-neutral-200" />
                 </div>
             ) : data?.is_active ? (
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                    <div className="flex flex-col sm:flex-row gap-4 sm:gap-10">
-                        <div>
-                            <p className="text-sm text-neutral-500">
-                                Recovery in progress
-                                {data.started_at && ` · since ${new Date(data.started_at).toLocaleString()}`}
-                            </p>
-                            <p className="text-2xl font-bold text-neutral-900">Rs. {formatAmount(data.total_amount)}</p>
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                            <span className="inline-block w-2.5 h-2.5 rounded-full bg-success-500 animate-pulse flex-shrink-0" aria-hidden="true" />
+                            <p className="text-sm font-semibold text-success-700">Recovery in progress</p>
                         </div>
-                        <div>
-                            <p className="text-sm text-neutral-500">Payments recorded</p>
-                            <p className="text-2xl font-bold text-neutral-900">{data.record_count.toLocaleString()}</p>
+                        {data.started_at && (
+                            <p className="text-xs text-neutral-500 mt-0.5 ml-[18px]">
+                                Since {new Date(data.started_at).toLocaleString()}
+                            </p>
+                        )}
+
+                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-10">
+                            <div className="min-w-0">
+                                <p className="text-sm text-neutral-500">Total recovered</p>
+                                <p className="text-2xl font-bold text-neutral-900 tabular-nums break-words">
+                                    Rs. {formatAmount(data.total_amount)}
+                                </p>
+                            </div>
+                            <div className="min-w-0">
+                                <p className="text-sm text-neutral-500">Payments recorded</p>
+                                <p className="text-2xl font-bold text-neutral-900 tabular-nums">
+                                    {data.record_count.toLocaleString()}
+                                </p>
+                            </div>
                         </div>
                     </div>
-                    <div className="flex flex-col sm:flex-row gap-3">
-                        <Button variant="secondary" icon={ListChecks} onClick={openDetails}>
+
+                    <div className="flex flex-col gap-3 sm:flex-row lg:flex-shrink-0">
+                        <Button variant="secondary" icon={ListChecks} onClick={openDetails} className="w-full sm:w-auto">
                             View Details
                         </Button>
-                        <Button variant="danger" icon={Square} onClick={() => setConfirmStop(true)} disabled={mutating}>
+                        <Button
+                            variant="danger"
+                            icon={Square}
+                            onClick={() => setConfirmStop(true)}
+                            disabled={mutating}
+                            className="w-full sm:w-auto"
+                        >
                             Stop Recovery
                         </Button>
                     </div>
                 </div>
             ) : (
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
                         <p className="font-semibold text-neutral-900">Payment Recovery</p>
                         <p className="text-sm text-neutral-500">
                             Start recovery to record every invoice payment received from now on.
                         </p>
                     </div>
-                    <Button icon={Play} onClick={handleStart} loading={mutating}>
+                    <Button icon={Play} onClick={handleStart} loading={mutating} className="w-full sm:w-auto sm:flex-shrink-0">
                         Start Recovery
                     </Button>
                 </div>

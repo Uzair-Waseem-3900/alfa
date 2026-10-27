@@ -615,6 +615,18 @@ const InvoiceDetailPage = () => {
                             {invoice.wht_total ? parseFloat(invoice.wht_total).toFixed(2) : '0.00'}
                         </td>
                     </tr>
+                    {(parseFloat(invoice.invoice_discount_amount) > 0 || (isDraft && parseFloat(invoice.invoice_discount_value) > 0)) && (
+                        <tr>
+                            <td colSpan={isAdmin && !isDraft ? 8 : 6} className="px-3 py-2 text-right font-medium">Invoice Discount:</td>
+                            <td className="px-3 py-2 text-right font-medium tabular-nums text-error-600">
+                                {isDraft
+                                    ? (invoice.invoice_discount_type === 'percent'
+                                        ? `${parseFloat(invoice.invoice_discount_value)}%`
+                                        : `- ${parseFloat(invoice.invoice_discount_value).toFixed(2)}`)
+                                    : `- ${parseFloat(invoice.invoice_discount_amount).toFixed(2)}`}
+                            </td>
+                        </tr>
+                    )}
                     <tr className="text-lg">
                         <td colSpan={isAdmin && !isDraft ? 8 : 6} className="px-3 py-2 text-right font-bold">Grand Total:</td>
                         <td className="px-3 py-2 text-right font-bold text-primary-600 tabular-nums">

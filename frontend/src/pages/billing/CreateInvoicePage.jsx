@@ -15,6 +15,7 @@ import Card from '../../components/ui/Card';
 import InlineAlert from '../../components/ui/InlineAlert';
 import EmptyState from '../../components/ui/EmptyState';
 import LineItemRow from '../../components/billing/LineItemRow';
+import InvoiceDiscountField from '../../components/billing/InvoiceDiscountField';
 import MethodSplitPicker, { isSplitBalanced } from '../../components/paymentMethods/MethodSplitPicker';
 import { extractErrorMessage } from '../../utils/errorMessage';
 
@@ -46,6 +47,8 @@ const CreateInvoicePage = () => {
         payment_type: 'after_delivery',
         advance_amount: '',
         payment_due_date: defaultDueDate(),
+        invoice_discount_type: 'flat',
+        invoice_discount_value: '',
         items: [],
     });
     const [methodAllocations, setMethodAllocations] = useState([]);
@@ -144,7 +147,16 @@ const CreateInvoicePage = () => {
             grandTotal += total;
         });
 
-        return { subtotal, gstTotal, whtTotal, grandTotal };
+        // Whole-invoice discount comes off the total (and profit), never the
+        // item prices. Mirrors backend billing.utils.resolve_invoice_discount.
+        const discountInput = parseFloat(formData.invoice_discount_value) || 0;
+        const invoiceDiscount = discountInput <= 0
+            ? 0
+            : formData.invoice_discount_type === 'percent'
+                ? (grandTotal * discountInput) / 100
+                : discountInput;
+
+        return { subtotal, gstTotal, whtTotal, grandTotal, invoiceDiscount, payableTotal: grandTotal - invoiceDiscount };
     };
 
     const applyServerErrors = (error) => {
@@ -160,6 +172,9 @@ const CreateInvoicePage = () => {
             }
             if (data.payment_due_date) nextFieldErrors.payment_due_date = firstMsg(data.payment_due_date);
             if (data.customer_id) nextFieldErrors.customer_id = firstMsg(data.customer_id);
+            if (data.invoice_discount_value || data.invoice_discount_type) {
+                nextFieldErrors.invoice_discount_value = firstMsg(data.invoice_discount_value || data.invoice_discount_type);
+            }
 
             if (data.items) {
                 if (Array.isArray(data.items)) {
@@ -214,6 +229,8 @@ const CreateInvoicePage = () => {
                 advance_amount: isAdvance ? advanceAmountValue : 0,
                 ...(isAdvance ? { method_allocations: methodAllocations } : {}),
                 payment_due_date: formData.payment_due_date || undefined,
+                invoice_discount_type: formData.invoice_discount_type,
+                invoice_discount_value: parseFloat(formData.invoice_discount_value) || 0,
                 items: formData.items.map(item => ({
                     product_id: parseInt(item.product_id),
                     quantity: parseInt(item.quantity) || 0,
@@ -407,14 +424,35 @@ const CreateInvoicePage = () => {
                                         PKR {totals.whtTotal.toFixed(2)}
                                     </span>
                                 </div>
+                                {totals.invoiceDiscount > 0 && (
+                                    <div className="flex justify-between w-full">
+                                        <span className="text-sm text-neutral-500">Invoice Discount:</span>
+                                        <span className="text-sm font-medium text-error-600">
+                                            - PKR {totals.invoiceDiscount.toFixed(2)}
+                                        </span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between w-full pt-2 border-t border-neutral-200">
                                     <span className="text-base font-semibold text-neutral-900">Grand Total:</span>
                                     <span className="text-base font-bold text-primary-600">
-                                        PKR {totals.grandTotal.toFixed(2)}
+                                        PKR {totals.payableTotal.toFixed(2)}
                                     </span>
                                 </div>
                             </div>
                         </motion.div>
+                    )}
+
+                    {formData.items.length > 0 && (
+                        <div className="mt-6 pt-4 border-t border-neutral-200 max-w-md ml-auto">
+                            <InvoiceDiscountField
+                                type={formData.invoice_discount_type}
+                                value={formData.invoice_discount_value}
+                                onChange={({ type, value }) => setFormData(prev => ({
+                                    ...prev, invoice_discount_type: type, invoice_discount_value: value,
+                                }))}
+                                error={fieldErrors.invoice_discount_value}
+                            />
+                        </div>
                     )}
                 </Card>
             </form>

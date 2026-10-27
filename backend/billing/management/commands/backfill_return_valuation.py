@@ -73,7 +73,7 @@ class Command(BaseCommand):
     def _build_plan(self, return_ids):
         from billing.models import Payment, Return, ReturnItem
         from billing.services import RETURN_CREDIT_NOTE_PREFIX
-        from billing.utils import calculate_return_line_total
+        from billing.utils import calculate_return_line_total, invoice_discount_factor
         from ledger.models import CustomerLedgerEntry
 
         plan = {
@@ -111,9 +111,12 @@ class Command(BaseCommand):
             for r in chunk:
                 new_total = Decimal("0")
                 differs = False
+                factor = invoice_discount_factor(r.invoice)
                 for ri in items_by_return.get(r.id, []):
                     price = ri.invoice_item.effective_price
-                    line = calculate_return_line_total(effective_price=price, quantity=ri.quantity)
+                    line = calculate_return_line_total(
+                        effective_price=price, quantity=ri.quantity, discount_factor=factor,
+                    )
                     new_total += line
                     if ri.selling_price != price or ri.line_total != line:
                         plan["item_fixes"].append((ri, price, line))
@@ -146,13 +149,18 @@ class Command(BaseCommand):
 
     def _pending_item_fixes(self, return_ids):
         from billing.models import ReturnItem
-        from billing.utils import calculate_return_line_total
+        from billing.utils import calculate_return_line_total, invoice_discount_factor
 
         fixes = []
         for i in range(0, len(return_ids), CHUNK):
-            for ri in ReturnItem.objects.filter(return_record_id__in=return_ids[i:i + CHUNK]).select_related("invoice_item"):
+            for ri in ReturnItem.objects.filter(
+                return_record_id__in=return_ids[i:i + CHUNK],
+            ).select_related("invoice_item__invoice"):
                 price = ri.invoice_item.effective_price
-                line = calculate_return_line_total(effective_price=price, quantity=ri.quantity)
+                line = calculate_return_line_total(
+                    effective_price=price, quantity=ri.quantity,
+                    discount_factor=invoice_discount_factor(ri.invoice_item.invoice),
+                )
                 if ri.selling_price != price or ri.line_total != line:
                     fixes.append((ri, price, line))
         return fixes

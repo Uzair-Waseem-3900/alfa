@@ -38,7 +38,10 @@ def get_invoice_print_context(invoice) -> dict:
                 "effective_price" : item.effective_price,
                 "line_total"      : item.line_total,
             })
-        return {"items": items_ctx, "grand_total": invoice.grand_total}
+        return {
+            "items": items_ctx, "grand_total": invoice.grand_total,
+            "invoice_discount": invoice.invoice_discount_amount,
+        }
 
     line_calcs = []
     for item in invoice.items.all():
@@ -65,15 +68,59 @@ def get_invoice_print_context(invoice) -> dict:
                 "line_total"      : None,
             })
 
-    grand_total = calculate_invoice_totals(line_calcs)["grand_total"] if line_calcs else None
-    return {"items": items_ctx, "grand_total": grand_total}
+    if not line_calcs:
+        return {"items": items_ctx, "grand_total": None, "invoice_discount": Decimal("0")}
+
+    pre_discount_total = calculate_invoice_totals(line_calcs)["grand_total"]
+    invoice_discount = resolve_invoice_discount(
+        discount_type=invoice.invoice_discount_type,
+        discount_value=invoice.invoice_discount_value,
+        pre_discount_total=pre_discount_total,
+    )
+    return {
+        "items": items_ctx,
+        "grand_total": pre_discount_total - invoice_discount,
+        "invoice_discount": invoice_discount,
+    }
 
 
 def quantize(value: Decimal) -> Decimal:
     return value.quantize(PRECISION, rounding=ROUND_HALF_UP)
 
 
-def calculate_return_line_total(*, effective_price, quantity) -> Decimal:
+def resolve_invoice_discount(*, discount_type, discount_value, pre_discount_total) -> Decimal:
+    """
+    Single source of truth for turning the user's whole-invoice discount
+    input into rupees. `pre_discount_total` is the tax-inclusive sum of line
+    totals (after item-level discounts) — a percent is taken of that, a flat
+    value is used as-is.
+    """
+    value = Decimal(str(discount_value or 0))
+    if value <= 0:
+        return Decimal("0")
+    if discount_type == "percent":
+        return quantize(Decimal(str(pre_discount_total)) * value / Decimal("100"))
+    return quantize(value)
+
+
+def invoice_discount_factor(invoice) -> Decimal:
+    """
+    Share of a returned line's value the customer actually paid, given the
+    invoice's whole-invoice discount: grand_total / (grand_total + discount).
+    1 when there is no discount (so undiscounted invoices are unaffected).
+    O(1) — reads only stored invoice fields; grand_total is never rewritten
+    by a return.
+    """
+    discount = invoice.invoice_discount_amount
+    if not discount:
+        return Decimal("1")
+    pre_discount_total = invoice.grand_total + discount
+    if pre_discount_total <= 0:
+        return Decimal("1")
+    return invoice.grand_total / pre_discount_total
+
+
+def calculate_return_line_total(*, effective_price, quantity, discount_factor=Decimal("1")) -> Decimal:
     """
     Single source of truth for what a returned line is worth: the quantity
     at the price the customer was actually billed (effective_price =
@@ -81,9 +128,14 @@ def calculate_return_line_total(*, effective_price, quantity) -> Decimal:
     included too), NOT the list selling_price. A full return therefore
     credits exactly what the invoice billed and outstanding reaches zero.
 
+    discount_factor (invoice_discount_factor) scales the value down by the
+    invoice's whole-invoice discount, so the credit equals what was paid.
+
     Tax (GST/WHT) is deliberately not part of a return's value yet.
     """
-    return quantize(Decimal(str(effective_price)) * Decimal(str(quantity)))
+    return quantize(
+        Decimal(str(effective_price)) * Decimal(str(quantity)) * Decimal(str(discount_factor))
+    )
 
 
 def calculate_line_item(
@@ -133,16 +185,18 @@ def calculate_line_item(
     }
 
 
-def calculate_invoice_totals(line_items: list[dict]) -> dict:
+def calculate_invoice_totals(line_items: list[dict], invoice_discount=Decimal("0")) -> dict:
     """
     Aggregates line-level results into invoice-level totals.
     line_items: list of dicts returned by calculate_line_item() + line_cogs.
+    invoice_discount: resolved whole-invoice discount in rupees.
 
     Returns:
         subtotal    = sum of line_gross  (before tax)
         gst_total   = sum of line_gst
         wht_total   = sum of line_wht
-        grand_total = sum of line_total  (tax-inclusive, what customer pays)
+        grand_total = sum of line_total - invoice_discount
+                      (tax-inclusive, what customer pays)
         total_cogs  = sum of line_cogs
         gross_profit = grand_total - total_cogs
     """
@@ -159,6 +213,7 @@ def calculate_invoice_totals(line_items: list[dict]) -> dict:
         grand_total += item["line_total"]
         total_cogs  += item["line_cogs"]
 
+    grand_total -= Decimal(str(invoice_discount or 0))
     gross_profit = grand_total - total_cogs
 
     return {

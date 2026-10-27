@@ -233,6 +233,12 @@
   <div class="totals-wrapper">
     <div class="totals-box">
       <table>
+        {% if invoice_discount_display %}
+        <tr>
+          <td class="label">Invoice Discount</td>
+          <td class="amount">-{{ invoice_discount_display }}</td>
+        </tr>
+        {% endif %}
         <tr class="grand-row">
           <td class="label">Grand Total</td>
           <td class="amount">{{ grand_total_display }}</td>

@@ -180,6 +180,8 @@ class InvoiceListCreateView(generics.ListCreateAPIView):
             advance_amount=d.get("advance_amount", 0),
             method_allocations=_as_splits(d.get("method_allocations")),
             payment_due_date=d.get("payment_due_date"),
+            invoice_discount_type=d.get("invoice_discount_type", "flat"),
+            invoice_discount_value=d.get("invoice_discount_value", 0),
             user=request.user,
         )
         # Re-fetch through the selector that carries the prefetches
@@ -296,6 +298,8 @@ class InvoiceRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
             advance_amount=serializer.validated_data.get("advance_amount"),
             method_allocations=_as_splits(serializer.validated_data.get("method_allocations")),
             payment_due_date=serializer.validated_data.get("payment_due_date"),
+            invoice_discount_type=serializer.validated_data.get("invoice_discount_type"),
+            invoice_discount_value=serializer.validated_data.get("invoice_discount_value"),
             user=request.user,
         )
         return Response(InvoiceReadSerializer(invoice, context={"request": request}).data)

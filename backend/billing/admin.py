@@ -56,6 +56,7 @@ class InvoiceAdmin(AuditAdminMixin, SoftDeleteAdminMixin, admin.ModelAdmin):
     readonly_fields = AuditAdminMixin.readonly_fields + (
         "bill_number", "status", "confirmed_by", "confirmed_at",
         "subtotal", "total_cogs", "gross_profit",
+        "invoice_discount_type", "invoice_discount_value", "invoice_discount_amount",
     )
     inlines = [InvoiceItemInline]
 

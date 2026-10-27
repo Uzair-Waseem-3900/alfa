@@ -80,6 +80,9 @@ const InvoicePreviewPage = () => {
     // meant for staff profit-margin eyeballing elsewhere in the app.
     const previewItems = isDraft ? (invoice.print_preview?.items ?? []) : (invoice.items ?? []);
     const grandTotal = isDraft ? invoice.print_preview?.grand_total : invoice.grand_total;
+    const invoiceDiscount = parseFloat(
+        isDraft ? invoice.print_preview?.invoice_discount_amount : invoice.invoice_discount_amount
+    ) || 0;
 
     return (
         <div className="min-h-screen bg-neutral-200">
@@ -171,6 +174,12 @@ const InvoicePreviewPage = () => {
                             advance/due-date, no notes. */}
                         <div className="flex justify-end">
                             <div className="w-full max-w-[200px] rounded border border-neutral-200 overflow-hidden">
+                                {invoiceDiscount > 0 && (
+                                    <div className="flex justify-between items-center px-3 py-1.5 text-xs text-neutral-700">
+                                        <span>Invoice Discount</span>
+                                        <span>- {fmtAmount(invoiceDiscount)}</span>
+                                    </div>
+                                )}
                                 <div className="flex justify-between items-center bg-neutral-900 px-3 py-2">
                                     <span className="text-white text-xs font-semibold">Grand Total</span>
                                     <span className="text-white text-sm font-bold">Rs. {fmtAmount(grandTotal)}</span>

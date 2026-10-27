@@ -15,6 +15,7 @@ import LoadingSpinner from '../../components/ui/LoadingSpinner';
 import InlineAlert from '../../components/ui/InlineAlert';
 import EmptyState from '../../components/ui/EmptyState';
 import LineItemRow from '../../components/billing/LineItemRow';
+import InvoiceDiscountField from '../../components/billing/InvoiceDiscountField';
 import DraftPreviewPanel from '../../components/billing/DraftPreviewPanel';
 import MethodSplitPicker, { isSplitBalanced } from '../../components/paymentMethods/MethodSplitPicker';
 import { extractErrorMessage } from '../../utils/errorMessage';
@@ -36,6 +37,8 @@ const EditInvoicePage = () => {
         payment_type: 'after_delivery',
         advance_amount: '',
         payment_due_date: '',
+        invoice_discount_type: 'flat',
+        invoice_discount_value: '',
         items: [],
     });
     // The advance amount as originally loaded — used to detect whether the
@@ -67,6 +70,10 @@ const EditInvoicePage = () => {
                 payment_type: invoiceData.payment_type || 'after_delivery',
                 advance_amount: invoiceData.advance_amount || '',
                 payment_due_date: invoiceData.payment_due_date || '',
+                invoice_discount_type: invoiceData.invoice_discount_type || 'flat',
+                invoice_discount_value: parseFloat(invoiceData.invoice_discount_value) > 0
+                    ? parseFloat(invoiceData.invoice_discount_value)
+                    : '',
                 items: invoiceData.items?.map(item => ({
                     product_id: item.product,
                     product_label: item.product_code ? `${item.product_code} - ${item.product_name}` : item.product_name,
@@ -151,6 +158,9 @@ const EditInvoicePage = () => {
                 nextFieldErrors.method_allocations = firstMsg(data.method_allocations || data.splits);
             }
             if (data.payment_due_date) nextFieldErrors.payment_due_date = firstMsg(data.payment_due_date);
+            if (data.invoice_discount_value || data.invoice_discount_type) {
+                nextFieldErrors.invoice_discount_value = firstMsg(data.invoice_discount_value || data.invoice_discount_type);
+            }
 
             if (data.items) {
                 if (Array.isArray(data.items)) {
@@ -212,6 +222,8 @@ const EditInvoicePage = () => {
                 advance_amount: isAdvance ? advanceAmountValue : 0,
                 ...(advanceChanged ? { method_allocations: methodAllocations } : {}),
                 payment_due_date: formData.payment_due_date || undefined,
+                invoice_discount_type: formData.invoice_discount_type,
+                invoice_discount_value: parseFloat(formData.invoice_discount_value) || 0,
                 items: formData.items.map(item => ({
                     product_id: parseInt(item.product_id),
                     quantity: parseInt(item.quantity) || 0,
@@ -405,6 +417,17 @@ const EditInvoicePage = () => {
                                 ))}
                             </AnimatePresence>
                         )}
+                    </div>
+
+                    <div className="mt-6 pt-4 border-t border-neutral-200 max-w-md ml-auto">
+                        <InvoiceDiscountField
+                            type={formData.invoice_discount_type}
+                            value={formData.invoice_discount_value}
+                            onChange={({ type, value }) => setFormData(prev => ({
+                                ...prev, invoice_discount_type: type, invoice_discount_value: value,
+                            }))}
+                            error={fieldErrors.invoice_discount_value}
+                        />
                     </div>
                 </Card>
 

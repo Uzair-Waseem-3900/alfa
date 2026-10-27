@@ -29,7 +29,9 @@ class Command(BaseCommand):
                 line_data.append(calc)
 
             if line_data:
-                totals = calculate_invoice_totals(line_data)
+                totals = calculate_invoice_totals(
+                    line_data, invoice_discount=invoice.invoice_discount_amount,
+                )
                 invoice.subtotal     = totals["subtotal"]
                 invoice.gst_total    = totals["gst_total"]
                 invoice.wht_total    = totals["wht_total"]

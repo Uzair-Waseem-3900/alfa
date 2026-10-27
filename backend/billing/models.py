@@ -144,6 +144,27 @@ class Invoice(AuditMixin):
         PARTIAL = "partial", "Partial"
         PAID    = "paid",    "Paid"
 
+    class InvoiceDiscountType(models.TextChoices):
+        PERCENT = "percent", "Percent"
+        FLAT    = "flat",    "Flat amount"
+
+    # Whole-invoice discount. Reduces grand_total (and therefore gross_profit,
+    # since total_cogs is untouched) — line selling/effective prices never
+    # change. Editable on a DRAFT only; `invoice_discount_amount` is the
+    # resolved rupee figure, snapshotted at confirmation.
+    invoice_discount_type   = models.CharField(
+        max_length=10, choices=InvoiceDiscountType.choices,
+        default=InvoiceDiscountType.FLAT,
+    )
+    invoice_discount_value  = models.DecimalField(
+        max_digits=18, decimal_places=4, default=0,
+        help_text="As entered: a whole-number percent (e.g. 3) or a flat rupee amount.",
+    )
+    invoice_discount_amount = models.DecimalField(
+        max_digits=18, decimal_places=4, default=0,
+        help_text="Resolved rupee amount, snapshotted at confirmation. 0 on drafts.",
+    )
+
     # Totals - computed and stored on confirmation
     subtotal      = models.DecimalField(max_digits=18, decimal_places=4, default=0)
     gst_total     = models.DecimalField(max_digits=18, decimal_places=4, default=0)

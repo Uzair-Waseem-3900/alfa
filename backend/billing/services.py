@@ -23,7 +23,7 @@ from .selectors import (
     get_return_by_id,
     get_return_item_by_id,
 )
-from .utils import calculate_return_line_total
+from .utils import calculate_return_line_total, invoice_discount_factor
 
 # Note prefix on the system-generated negative credit-note Payment that
 # accept_return creates (no dedicated field links it to its Return). Used by
@@ -362,7 +362,7 @@ def _recalculate_invoice_totals(invoice: Invoice) -> None:
         }
         for item in invoice.items.all()
     ]
-    totals = calculate_invoice_totals(line_data)
+    totals = calculate_invoice_totals(line_data, invoice_discount=invoice.invoice_discount_amount)
 
     invoice.subtotal     = totals["subtotal"]
     invoice.gst_total    = totals["gst_total"]
@@ -372,8 +372,72 @@ def _recalculate_invoice_totals(invoice: Invoice) -> None:
     invoice.gross_profit = totals["gross_profit"]
     invoice.save(update_fields=[
         "subtotal", "gst_total", "wht_total", "grand_total",
-        "total_cogs", "gross_profit",
+        "total_cogs", "gross_profit", "invoice_discount_amount",
     ])
+
+
+def _raise_invoice_discount_too_high(*, amount: Decimal, gross_profit: Decimal) -> None:
+    from rest_framework.exceptions import ValidationError
+    max_allowed = max(gross_profit, Decimal("0"))
+    raise ValidationError({
+        "invoice_discount_value": (
+            f"Invoice discount Rs {amount:,.2f} exceeds this invoice's gross profit "
+            f"Rs {max_allowed:,.2f}. Reduce it to at most Rs {max_allowed:,.2f}."
+        )
+    })
+
+
+def _validate_invoice_discount_for_draft(*, validated_items, discount_type: str, discount_value: Decimal) -> None:
+    """
+    Draft-time check that the whole-invoice discount does not exceed the
+    invoice's gross profit (tax-inclusive line totals after item-level
+    discounts, minus the FIFO-peeked cost). Skipped entirely when there is no
+    discount, so the common path costs nothing. One batches query for the
+    whole invoice (no per-line queries); mirrors _build_draft_preview's peek.
+    confirm_invoice re-checks with the real FIFO cost — this is the early
+    warning so the user sees the error while editing.
+    """
+    from .utils import calculate_invoice_totals, calculate_line_item, resolve_invoice_discount
+    from purchases.models import PurchaseItem
+
+    if not discount_value or discount_value <= 0:
+        return
+
+    batches_by_product = {}
+    for batch in (
+        PurchaseItem.objects
+        .filter(
+            product_id__in=[p.id for p, *_ in validated_items],
+            is_deleted=False, remaining_quantity__gt=0,
+        )
+        .order_by("created_at")
+    ):
+        batches_by_product.setdefault(batch.product_id, []).append(batch)
+
+    line_calcs = []
+    for product, quantity, discount, gst, wht in validated_items:
+        calc = calculate_line_item(
+            quantity=quantity, selling_price=_get_current_selling_price(product),
+            discount=discount, gst=gst, wht=wht,
+        )
+        remaining, cost = quantity, Decimal("0")
+        for batch in batches_by_product.get(product.id, []):
+            if remaining <= 0:
+                break
+            consume = min(batch.remaining_quantity, remaining)
+            cost += consume * (
+                batch.total_price / batch.quantity if batch.quantity > 0 else batch.unit_price
+            )
+            remaining -= consume
+        line_calcs.append({**calc, "line_cogs": cost})
+
+    totals = calculate_invoice_totals(line_calcs)
+    amount = resolve_invoice_discount(
+        discount_type=discount_type, discount_value=discount_value,
+        pre_discount_total=totals["grand_total"],
+    )
+    if amount > totals["gross_profit"]:
+        _raise_invoice_discount_too_high(amount=amount, gross_profit=totals["gross_profit"])
 
 
 # ---------------------------------------------------------------------------
@@ -588,7 +652,8 @@ def delete_customer(*, pk: int, user) -> None:
 def create_invoice(
     *, customer_id: int, items: list[dict],
     payment_type: str = "after_delivery", advance_amount: Decimal = Decimal("0"),
-    method_allocations: list = None, payment_due_date=None, user,
+    method_allocations: list = None, payment_due_date=None,
+    invoice_discount_type: str = "flat", invoice_discount_value: Decimal = Decimal("0"), user,
 ) -> Invoice:
     """
     Creates a DRAFT invoice with line items.
@@ -644,6 +709,11 @@ def create_invoice(
             item.get("wht",      Decimal("0")),
         ))
 
+    _validate_invoice_discount_for_draft(
+        validated_items=validated_items,
+        discount_type=invoice_discount_type, discount_value=invoice_discount_value,
+    )
+
     invoice = Invoice.objects.create(
         bill_number=_generate_bill_number(),
         customer_id=customer_id,
@@ -651,6 +721,8 @@ def create_invoice(
         payment_type=payment_type,
         advance_amount=advance_amount,
         payment_due_date=payment_due_date,
+        invoice_discount_type=invoice_discount_type,
+        invoice_discount_value=invoice_discount_value,
         created_by=user,
         updated_by=user,
     )
@@ -705,7 +777,8 @@ def create_invoice(
 def update_invoice_items(
     *, invoice_id: int, items: list[dict],
     payment_type: str = None, advance_amount: Decimal = None,
-    method_allocations: list = None, payment_due_date=None, user,
+    method_allocations: list = None, payment_due_date=None,
+    invoice_discount_type: str = None, invoice_discount_value: Decimal = None, user,
 ) -> Invoice:
     """
     Replaces all line items on a DRAFT invoice.
@@ -744,6 +817,17 @@ def update_invoice_items(
             item.get("gst",      Decimal("0")),
             item.get("wht",      Decimal("0")),
         ))
+
+    # Omitted discount fields keep their current values. Validated against
+    # the NEW items before anything is deleted/replaced.
+    if invoice_discount_type is not None:
+        invoice.invoice_discount_type = invoice_discount_type
+    if invoice_discount_value is not None:
+        invoice.invoice_discount_value = invoice_discount_value
+    _validate_invoice_discount_for_draft(
+        validated_items=validated_items,
+        discount_type=invoice.invoice_discount_type, discount_value=invoice.invoice_discount_value,
+    )
 
     # Replace all existing items
     invoice.items.all().delete()
@@ -787,7 +871,8 @@ def update_invoice_items(
 
     invoice.updated_by = user
     invoice.save(update_fields=[
-        "payment_type", "advance_amount", "payment_due_date", "updated_by", "updated_at",
+        "payment_type", "advance_amount", "payment_due_date",
+        "invoice_discount_type", "invoice_discount_value", "updated_by", "updated_at",
     ])
     return invoice
 
@@ -1146,7 +1231,22 @@ def confirm_invoice(*, invoice_id: int, user) -> Invoice:
             from purchases.services import _adjust_stock_movement
             _adjust_stock_movement(product_id=item.product_id, sold_delta=item.quantity)
 
-    _recalculate_invoice_totals(invoice)
+    # Whole-invoice discount: resolve to rupees now (snapshot) and re-check
+    # against the REAL gross profit (actual FIFO cost). Raising here rolls
+    # back the whole atomic confirm, including the stock just consumed.
+    from .utils import resolve_invoice_discount
+    pre_discount_total = sum((i.line_total for i in sorted_items), Decimal("0"))
+    confirmed_cogs     = sum((i.line_cogs for i in sorted_items), Decimal("0"))
+    invoice.invoice_discount_amount = resolve_invoice_discount(
+        discount_type=invoice.invoice_discount_type,
+        discount_value=invoice.invoice_discount_value,
+        pre_discount_total=pre_discount_total,
+    )
+    if invoice.invoice_discount_amount > pre_discount_total - confirmed_cogs:
+        _raise_invoice_discount_too_high(
+            amount=invoice.invoice_discount_amount, gross_profit=pre_discount_total - confirmed_cogs,
+        )
+    _recalculate_invoice_totals(invoice)  # also persists invoice_discount_amount
 
     invoice.status       = Invoice.Status.CONFIRMED
     invoice.confirmed_by = user
@@ -1535,6 +1635,7 @@ def create_return(*, invoice_id: int, items: list[dict], note: str = "", user) -
     if not items:
         raise ValidationError({"items": "At least one item is required for a return."})
 
+    discount_factor = invoice_discount_factor(invoice)
     return_record = Return.objects.create(
         invoice=invoice,
         reference_number=_generate_return_reference(),
@@ -1569,7 +1670,9 @@ def create_return(*, invoice_id: int, items: list[dict], note: str = "", user) -
             quantity=qty,
             selling_price=selling_price,
             cogs_per_unit=cogs_per_unit,
-            line_total=calculate_return_line_total(effective_price=selling_price, quantity=qty),
+            line_total=calculate_return_line_total(
+                effective_price=selling_price, quantity=qty, discount_factor=discount_factor,
+            ),
             line_cogs=cogs_per_unit * qty,
         )
 
@@ -1596,6 +1699,7 @@ def update_return_items(*, return_id: int, items: list[dict], note: str = None, 
     if not items:
         raise ValidationError({"items": "At least one item is required for a return."})
 
+    discount_factor = invoice_discount_factor(return_record.invoice)
     return_record.items.all().delete()
     for item_data in items:
         invoice_item = get_invoice_item_by_id(item_data["invoice_item_id"])
@@ -1622,7 +1726,9 @@ def update_return_items(*, return_id: int, items: list[dict], note: str = None, 
             quantity=qty,
             selling_price=selling_price,
             cogs_per_unit=cogs_per_unit,
-            line_total=calculate_return_line_total(effective_price=selling_price, quantity=qty),
+            line_total=calculate_return_line_total(
+                effective_price=selling_price, quantity=qty, discount_factor=discount_factor,
+            ),
             line_cogs=cogs_per_unit * qty,
         )
 
@@ -1688,6 +1794,25 @@ def accept_return(*, return_id: int, user) -> Return:
 
     total_return_amount = Decimal("0")
     total_return_cogs   = Decimal("0")
+    discount_factor     = invoice_discount_factor(return_record.invoice)
+
+    # Per-line rounding of the prorated credit can leave a few 0.0001 units
+    # between the sum of all credits and grand_total. When THIS return
+    # completes a full return of a discounted invoice, the last line absorbs
+    # that remainder so the customer is credited exactly what they paid.
+    # Only runs for discounted invoices (one aggregate, only on that branch).
+    exact_final_target = None
+    inv = return_record.invoice
+    if inv.invoice_discount_amount:
+        inv_items = list(inv.items.all())
+        if (
+            sum(i.returned_quantity for i in inv_items) + sum(ri.quantity for ri in return_items)
+            >= sum(i.quantity for i in inv_items)
+        ):
+            prior_credited = Return.objects.filter(
+                invoice=inv, status=Return.Status.ACCEPTED,
+            ).aggregate(t=Sum("total_return_amount"))["t"] or Decimal("0")
+            exact_final_target = inv.grand_total - prior_credited
 
     for return_item in return_items:
         invoice_item  = return_item.invoice_item
@@ -1697,7 +1822,9 @@ def accept_return(*, return_id: int, user) -> Return:
         # (after discount/surcharge), not the list selling_price
         selling_price = invoice_item.effective_price
         cogs_per_unit = invoice_item.cogs_per_unit
-        line_total    = calculate_return_line_total(effective_price=selling_price, quantity=qty)
+        line_total    = calculate_return_line_total(
+            effective_price=selling_price, quantity=qty, discount_factor=discount_factor,
+        )
         line_cogs     = cogs_per_unit * qty
 
         return_item.selling_price = selling_price
@@ -1731,6 +1858,16 @@ def accept_return(*, return_id: int, user) -> Return:
 
         total_return_amount += line_total
         total_return_cogs   += line_cogs
+
+    if exact_final_target is not None:
+        remainder = exact_final_target - total_return_amount
+        # Only the sub-cent rounding residue is absorbed; a larger gap means
+        # something else (e.g. tax, which returns don't credit) and is left alone.
+        if remainder and abs(remainder) <= Decimal("0.0001") * len(return_items):
+            last = return_items[-1]
+            last.line_total += remainder
+            last.save(update_fields=["line_total"])
+            total_return_amount += remainder
 
     # Save return totals
     return_record.total_return_amount = total_return_amount

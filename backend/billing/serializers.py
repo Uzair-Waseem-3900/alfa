@@ -390,6 +390,7 @@ class InvoiceReadSerializer(serializers.ModelSerializer):
         fields = [
             "id", "bill_number", "customer", "status",
             "payment_type", "advance_amount", "payment_due_date",
+            "invoice_discount_type", "invoice_discount_value", "invoice_discount_amount",
             "subtotal", "gst_total", "wht_total", "grand_total",
             "total_cogs", "gross_profit",
             # payment summary inline on every invoice response
@@ -437,11 +438,31 @@ class InvoiceReadSerializer(serializers.ModelSerializer):
                 for item in ctx["items"]
             ],
             "grand_total": str(ctx["grand_total"]) if ctx["grand_total"] is not None else None,
+            "invoice_discount_amount": str(ctx["invoice_discount"]),
         }
+
+
+def _validate_invoice_discount_input(discount_type, discount_value):
+    """Shared by create/update. Percent is a whole number (3 = 3%)."""
+    if discount_value is not None and discount_value < 0:
+        raise serializers.ValidationError(
+            {"invoice_discount_value": "Invoice discount cannot be negative."}
+        )
+    if discount_type == "percent" and discount_value is not None and discount_value > 100:
+        raise serializers.ValidationError(
+            {"invoice_discount_value": "Invoice discount percentage cannot exceed 100."}
+        )
 
 
 class InvoiceCreateSerializer(serializers.Serializer):
     customer_id    = serializers.IntegerField()
+    invoice_discount_type = serializers.ChoiceField(
+        choices=["percent", "flat"], default="flat", required=False,
+        help_text="percent: whole-number % of the invoice total. flat: rupee amount. Reduces gross profit, not item prices.",
+    )
+    invoice_discount_value = serializers.DecimalField(
+        max_digits=18, decimal_places=4, default=0, required=False,
+    )
     payment_type   = serializers.ChoiceField(
         choices=["advance", "after_delivery"],
         default="after_delivery",
@@ -463,6 +484,9 @@ class InvoiceCreateSerializer(serializers.Serializer):
     items = InvoiceItemWriteSerializer(many=True)
 
     def validate(self, attrs):
+        _validate_invoice_discount_input(
+            attrs.get("invoice_discount_type", "flat"), attrs.get("invoice_discount_value", 0),
+        )
         payment_type   = attrs.get("payment_type", "after_delivery")
         advance_amount = attrs.get("advance_amount", 0)
         if payment_type == "after_delivery" and advance_amount and advance_amount > 0:
@@ -500,7 +524,18 @@ class InvoiceUpdateSerializer(serializers.Serializer):
         help_text="Required whenever advance_amount is being set to a value > 0 — the new split is never reused from the old amount.",
     )
     payment_due_date = serializers.DateField(required=False)
+    invoice_discount_type = serializers.ChoiceField(choices=["percent", "flat"], required=False)
+    invoice_discount_value = serializers.DecimalField(max_digits=18, decimal_places=4, required=False)
     items = InvoiceItemWriteSerializer(many=True)
+
+    def validate(self, attrs):
+        # A partial change (only type or only value) is checked against the
+        # invoice's current counterpart when the service applies it; here we
+        # can only check what was actually sent.
+        _validate_invoice_discount_input(
+            attrs.get("invoice_discount_type"), attrs.get("invoice_discount_value"),
+        )
+        return attrs
 
     def validate_items(self, value):
         if not value:

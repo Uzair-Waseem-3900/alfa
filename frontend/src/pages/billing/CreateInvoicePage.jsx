@@ -47,7 +47,7 @@ const CreateInvoicePage = () => {
         payment_type: 'after_delivery',
         advance_amount: '',
         payment_due_date: defaultDueDate(),
-        invoice_discount_type: 'flat',
+        invoice_discount_type: 'percent',
         invoice_discount_value: '',
         items: [],
     });

@@ -530,6 +530,15 @@ const InvoiceDetailPage = () => {
 
     const isDraft = invoice.status === 'draft';
     const canManage = !isDraft && isAdmin;
+    // A draft has no stored discount amount/percent yet — they come from
+    // print_preview (the same backend calc the PDF uses); confirmed invoices
+    // read the stored values.
+    const invoiceDiscountAmount = parseFloat(
+        isDraft ? invoice.print_preview?.invoice_discount_amount : invoice.invoice_discount_amount
+    ) || 0;
+    const invoiceDiscountPercent = isDraft
+        ? invoice.print_preview?.invoice_discount_percent
+        : invoice.invoice_discount_percent;
 
     const tabs = [
         { value: 'items', label: 'Items', count: invoice.items?.length ?? 0 },
@@ -615,15 +624,13 @@ const InvoiceDetailPage = () => {
                             {invoice.wht_total ? parseFloat(invoice.wht_total).toFixed(2) : '0.00'}
                         </td>
                     </tr>
-                    {(parseFloat(invoice.invoice_discount_amount) > 0 || (isDraft && parseFloat(invoice.invoice_discount_value) > 0)) && (
+                    {invoiceDiscountAmount > 0 && (
                         <tr>
-                            <td colSpan={isAdmin && !isDraft ? 8 : 6} className="px-3 py-2 text-right font-medium">Invoice Discount:</td>
+                            <td colSpan={isAdmin && !isDraft ? 8 : 6} className="px-3 py-2 text-right font-medium">
+                                Invoice Discount{invoiceDiscountPercent ? ` (${invoiceDiscountPercent}%)` : ''}:
+                            </td>
                             <td className="px-3 py-2 text-right font-medium tabular-nums text-error-600">
-                                {isDraft
-                                    ? (invoice.invoice_discount_type === 'percent'
-                                        ? `${parseFloat(invoice.invoice_discount_value)}%`
-                                        : `- ${parseFloat(invoice.invoice_discount_value).toFixed(2)}`)
-                                    : `- ${parseFloat(invoice.invoice_discount_amount).toFixed(2)}`}
+                                - {invoiceDiscountAmount.toFixed(2)}
                             </td>
                         </tr>
                     )}

@@ -83,6 +83,9 @@ const InvoicePreviewPage = () => {
     const invoiceDiscount = parseFloat(
         isDraft ? invoice.print_preview?.invoice_discount_amount : invoice.invoice_discount_amount
     ) || 0;
+    const invoiceDiscountPercent = isDraft
+        ? invoice.print_preview?.invoice_discount_percent
+        : invoice.invoice_discount_percent;
 
     return (
         <div className="min-h-screen bg-neutral-200">
@@ -173,14 +176,14 @@ const InvoicePreviewPage = () => {
                             no subtotal/tax breakdown, no payment status, no
                             advance/due-date, no notes. */}
                         <div className="flex justify-end">
-                            <div className="w-full max-w-[200px] rounded border border-neutral-200 overflow-hidden">
+                            <div className="w-full max-w-[280px] rounded border border-neutral-200 overflow-hidden">
                                 {invoiceDiscount > 0 && (
-                                    <div className="flex justify-between items-center px-3 py-1.5 text-xs text-neutral-700">
-                                        <span>Invoice Discount</span>
+                                    <div className="flex justify-between items-center gap-3 whitespace-nowrap px-3 py-1.5 text-xs text-neutral-700">
+                                        <span>Invoice Discount{invoiceDiscountPercent ? ` (${invoiceDiscountPercent}%)` : ''}</span>
                                         <span>- {fmtAmount(invoiceDiscount)}</span>
                                     </div>
                                 )}
-                                <div className="flex justify-between items-center bg-neutral-900 px-3 py-2">
+                                <div className="flex justify-between items-center gap-3 whitespace-nowrap bg-neutral-900 px-3 py-2">
                                     <span className="text-white text-xs font-semibold">Grand Total</span>
                                     <span className="text-white text-sm font-bold">Rs. {fmtAmount(grandTotal)}</span>
                                 </div>

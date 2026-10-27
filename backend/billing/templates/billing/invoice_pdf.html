@@ -235,7 +235,7 @@
       <table>
         {% if invoice_discount_display %}
         <tr>
-          <td class="label">Invoice Discount</td>
+          <td class="label">Invoice Discount{% if invoice_discount_percent %} ({{ invoice_discount_percent }}%){% endif %}</td>
           <td class="amount">-{{ invoice_discount_display }}</td>
         </tr>
         {% endif %}

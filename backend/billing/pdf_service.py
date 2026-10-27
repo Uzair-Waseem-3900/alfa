@@ -67,7 +67,8 @@ def _render_invoice_html(invoice: Invoice, is_draft: bool) -> str:
         "invoice_discount_display": (
             f"{print_context['invoice_discount']:,.4f}" if print_context["invoice_discount"] else ""
         ),
-        "invoice_date"      : invoice_date,
+        "invoice_discount_percent": print_context["invoice_discount_percent"],
+        "invoice_date"     : invoice_date,
         "generated_at"       : timezone.localtime(timezone.now()).strftime("%d %b %Y %H:%M"),
         "company_name"       : settings.COMPANY_NAME,
         "company_logo"       : get_company_logo_data_uri(),

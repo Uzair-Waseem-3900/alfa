@@ -41,6 +41,11 @@ def get_invoice_print_context(invoice) -> dict:
         return {
             "items": items_ctx, "grand_total": invoice.grand_total,
             "invoice_discount": invoice.invoice_discount_amount,
+            "invoice_discount_percent": invoice_discount_percent(
+                discount_type=invoice.invoice_discount_type,
+                discount_value=invoice.invoice_discount_value,
+                amount=invoice.invoice_discount_amount, grand_total=invoice.grand_total,
+            ),
         }
 
     line_calcs = []
@@ -69,7 +74,10 @@ def get_invoice_print_context(invoice) -> dict:
             })
 
     if not line_calcs:
-        return {"items": items_ctx, "grand_total": None, "invoice_discount": Decimal("0")}
+        return {
+            "items": items_ctx, "grand_total": None,
+            "invoice_discount": Decimal("0"), "invoice_discount_percent": None,
+        }
 
     pre_discount_total = calculate_invoice_totals(line_calcs)["grand_total"]
     invoice_discount = resolve_invoice_discount(
@@ -81,6 +89,11 @@ def get_invoice_print_context(invoice) -> dict:
         "items": items_ctx,
         "grand_total": pre_discount_total - invoice_discount,
         "invoice_discount": invoice_discount,
+        "invoice_discount_percent": invoice_discount_percent(
+            discount_type=invoice.invoice_discount_type,
+            discount_value=invoice.invoice_discount_value,
+            amount=invoice_discount, grand_total=pre_discount_total - invoice_discount,
+        ),
     }
 
 
@@ -101,6 +114,27 @@ def resolve_invoice_discount(*, discount_type, discount_value, pre_discount_tota
     if discount_type == "percent":
         return quantize(Decimal(str(pre_discount_total)) * value / Decimal("100"))
     return quantize(value)
+
+
+def invoice_discount_percent(*, discount_type, discount_value, amount, grand_total):
+    """
+    Display-only: the whole-invoice discount as a percentage string ("3",
+    "25", "3.5"), or None when there is no discount. A percent-type discount
+    shows the value the user typed; a flat one is derived as
+    amount / (grand_total + amount) * 100, where grand_total is AFTER the
+    discount. Single source for the API, the print preview and the PDF.
+    """
+    amount = Decimal(str(amount or 0))
+    if amount <= 0:
+        return None
+    if discount_type == "percent":
+        pct = Decimal(str(discount_value or 0))
+    else:
+        pre_discount_total = Decimal(str(grand_total or 0)) + amount
+        if pre_discount_total <= 0:
+            return None
+        pct = amount / pre_discount_total * Decimal("100")
+    return format(pct.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP).normalize(), "f")
 
 
 def invoice_discount_factor(invoice) -> Decimal:

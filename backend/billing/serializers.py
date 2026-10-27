@@ -384,6 +384,7 @@ class InvoiceReadSerializer(serializers.ModelSerializer):
     draft_preview          = serializers.SerializerMethodField()
     print_preview          = serializers.SerializerMethodField()
     payment_status_display = serializers.CharField(source="get_payment_status_display", read_only=True)
+    invoice_discount_percent = serializers.SerializerMethodField()
 
     class Meta:
         model = Invoice
@@ -391,6 +392,7 @@ class InvoiceReadSerializer(serializers.ModelSerializer):
             "id", "bill_number", "customer", "status",
             "payment_type", "advance_amount", "payment_due_date",
             "invoice_discount_type", "invoice_discount_value", "invoice_discount_amount",
+            "invoice_discount_percent",
             "subtotal", "gst_total", "wht_total", "grand_total",
             "total_cogs", "gross_profit",
             # payment summary inline on every invoice response
@@ -412,6 +414,17 @@ class InvoiceReadSerializer(serializers.ModelSerializer):
             for field in self._STAFF_ONLY_FIELDS:
                 data.pop(field, None)
         return data
+
+    def get_invoice_discount_percent(self, obj):
+        # Drafts have no stored amount yet — their percent comes from
+        # print_preview (same helper), so it isn't computed twice here.
+        if obj.status == Invoice.Status.DRAFT:
+            return None
+        from .utils import invoice_discount_percent
+        return invoice_discount_percent(
+            discount_type=obj.invoice_discount_type, discount_value=obj.invoice_discount_value,
+            amount=obj.invoice_discount_amount, grand_total=obj.grand_total,
+        )
 
     def get_draft_preview(self, obj):
         return _build_draft_preview(obj)
@@ -439,6 +452,7 @@ class InvoiceReadSerializer(serializers.ModelSerializer):
             ],
             "grand_total": str(ctx["grand_total"]) if ctx["grand_total"] is not None else None,
             "invoice_discount_amount": str(ctx["invoice_discount"]),
+            "invoice_discount_percent": ctx["invoice_discount_percent"],
         }
 
 

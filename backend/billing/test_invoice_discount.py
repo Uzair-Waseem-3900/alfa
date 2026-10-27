@@ -283,3 +283,55 @@ class InvoiceDiscountRoundingTests(BillingTestBase):
         self.assertEqual(Payment.objects.get(note__endswith=ret.reference_number).amount, Decimal("-29"))
         self.assertEqual(invoice.credit_outstanding, Decimal("0"))
         self.assertEqual(invoice.payment_status, Invoice.PaymentStatus.PAID)
+
+
+class InvoiceDiscountPercentDisplayTests(BillingTestBase):
+    """invoice_discount_percent: typed value for percent, derived for flat."""
+
+    def setUp(self):
+        super().setUp()
+        self.product = self.make_stocked_product(stock=20, unit_cost="50", selling_price="100")
+
+    def draft(self, dtype, dvalue):
+        return create_invoice(
+            customer_id=self.customer.id,
+            items=[{"product_id": self.product.id, "quantity": 4}],
+            invoice_discount_type=dtype, invoice_discount_value=Decimal(dvalue), user=self.admin,
+        )
+
+    def detail(self, invoice):
+        from .serializers import InvoiceReadSerializer
+        from .selectors import get_invoice_by_id
+        return InvoiceReadSerializer(
+            get_invoice_by_id(invoice.id),
+            context={"request": type("FakeRequest", (), {"user": self.admin})()},
+        ).data
+
+    def test_percent_type_shows_typed_value_confirmed_and_draft(self):
+        invoice = self.draft("percent", "3")
+        data = self.detail(invoice)
+        self.assertIsNone(data["invoice_discount_percent"])  # drafts use print_preview
+        self.assertEqual(data["print_preview"]["invoice_discount_percent"], "3")
+        self.assertEqual(data["print_preview"]["invoice_discount_amount"], "12.0000")
+        self.allocate_invoice_items(invoice)
+        confirm_invoice(invoice_id=invoice.id, user=self.admin)
+        self.assertEqual(self.detail(invoice)["invoice_discount_percent"], "3")
+
+    def test_flat_type_derives_percent_confirmed_and_draft(self):
+        invoice = self.draft("flat", "100")  # 100 off a 400 bill = 25%
+        self.assertEqual(self.detail(invoice)["print_preview"]["invoice_discount_percent"], "25")
+        self.allocate_invoice_items(invoice)
+        confirm_invoice(invoice_id=invoice.id, user=self.admin)
+        self.assertEqual(self.detail(invoice)["invoice_discount_percent"], "25")
+
+    def test_fractional_percent_and_no_discount(self):
+        from .utils import invoice_discount_percent
+        self.assertEqual(
+            invoice_discount_percent(discount_type="flat", discount_value=10, amount=Decimal("10"), grand_total=Decimal("290")),
+            "3.33",
+        )
+        self.assertEqual(
+            invoice_discount_percent(discount_type="percent", discount_value=Decimal("3.5"), amount=Decimal("14"), grand_total=Decimal("386")),
+            "3.5",
+        )
+        self.assertIsNone(self.detail(self.draft("flat", "0"))["print_preview"]["invoice_discount_percent"])

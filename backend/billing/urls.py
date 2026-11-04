@@ -44,7 +44,7 @@ urlpatterns = [
     path("customers/<int:pk>/", CustomerRetrieveUpdateDestroyView.as_view(), name="customer-detail"),
 
     # Invoices
-    # path("invoices/", InvoiceListCreateView.as_view(), name="invoice-list-create"),
+    path("invoices/", InvoiceListCreateView.as_view(), name="invoice-list-create"),
     path("invoices/drafts/", DraftInvoiceListView.as_view(), name="invoice-drafts"),
     path("invoices/due/", DueInvoiceListView.as_view(), name="invoice-due"),
     path("invoices/summary/", InvoiceSummaryView.as_view(), name="invoice-summary"),

@@ -250,7 +250,8 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 
 
-
+# Celery
+# celery -A backend worker -l info
 # import ssl
 # # Add SSL configuration for Celery
 # CELERY_BROKER_USE_SSL = {
@@ -259,7 +260,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 # CELERY_REDIS_BACKEND_USE_SSL = {
 #     'ssl_cert_reqs': ssl.CERT_REQUIRED  # or ssl.CERT_NONE for testing
 # }
- 
+REDIS_URL=os.getenv("REDIS_URL", "redis://127.0.0.1:6379")
 CELERY_BROKER_URL         = f"{REDIS_URL}/0"
 CELERY_RESULT_BACKEND     = f"{REDIS_URL}/0"
 CELERY_WORKER_POOL        = "solo"

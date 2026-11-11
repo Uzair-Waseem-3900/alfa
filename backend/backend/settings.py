@@ -247,3 +247,27 @@ MEDIA_ROOT = BASE_DIR / 'media'
 #         "HOST": os.getenv("DB_HOST1"),
 #         "PORT": os.getenv("DB_PORT1"),
 #     }
+
+
+
+
+# import ssl
+# # Add SSL configuration for Celery
+# CELERY_BROKER_USE_SSL = {
+#     'ssl_cert_reqs': ssl.CERT_REQUIRED  # or ssl.CERT_NONE for testing
+# }
+# CELERY_REDIS_BACKEND_USE_SSL = {
+#     'ssl_cert_reqs': ssl.CERT_REQUIRED  # or ssl.CERT_NONE for testing
+# }
+ 
+CELERY_BROKER_URL         = f"{REDIS_URL}/0"
+CELERY_RESULT_BACKEND     = f"{REDIS_URL}/0"
+CELERY_WORKER_POOL        = "solo"
+CELERY_ACCEPT_CONTENT     = ["application/json"]
+CELERY_RESULT_SERIALIZER  = "json"
+CELERY_TASK_SERIALIZER    = "json"
+CELERY_TIMEZONE           = "Asia/Karachi"
+CELERY_TASK_TRACK_STARTED = True
+CELERY_TASK_TIME_LIMIT    = 30 * 60   # 30 minutes
+CELERY_RESULT_EXPIRES     = 86400     # 1 day
+CELERY_WORKER_POOL_RESTARTS = True

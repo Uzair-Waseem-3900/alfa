@@ -74,6 +74,7 @@ EXTERNAL_APPS = [
     'payment_methods',
     'sales_man',
     'b2b',
+    'ai_agent',
 ]
 
 INSTALLED_APPS += EXTERNAL_APPS
@@ -211,7 +212,8 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_THROTTLE_RATES": {
         "anon": "20/minute",   # 20 requests per minute for unauthenticated users
-        "user": "120/minute"   # 120 requests per minute for authenticated users
+        "user": "120/minute",  # 120 requests per minute for authenticated users
+        "agent": "20/minute",  # ai_agent: every run costs LLM calls (ScopedRateThrottle)
     }
 }
  
@@ -272,3 +274,26 @@ CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT    = 30 * 60   # 30 minutes
 CELERY_RESULT_EXPIRES     = 86400     # 1 day
 CELERY_WORKER_POOL_RESTARTS = True
+# ai_agent runs on its OWN queue so its (slow, LLM-bound) tasks never compete
+# with other workers on the default "celery" queue, and can be scaled alone:
+#   celery -A backend worker -Q agent -l info
+CELERY_TASK_ROUTES = {"ai_agent.tasks.run_agent_task": {"queue": "agent"}}
+
+
+# ---- ai_agent (business chat assistant) ----
+# Gemini through its OpenAI-compatible endpoint (dev/free tier). GEMINI_API_KEY
+# lives only in .env. Everything below is env-overridable, nothing hardcoded
+# in app code.
+GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+AGENT_NAME      = os.getenv("AGENT_NAME", "Munshi")
+AGENT_MODEL     = os.getenv("AGENT_MODEL", "gemini-2.5-flash")
+AGENT_MAX_TURNS = int(os.getenv("AGENT_MAX_TURNS", "8"))              # LLM round trips per question
+AGENT_HISTORY_ITEM_LIMIT = int(os.getenv("AGENT_HISTORY_ITEM_LIMIT", "40"))  # session items fed back to the LLM
+AGENT_TOOL_ROW_CAP = int(os.getenv("AGENT_TOOL_ROW_CAP", "25"))       # max rows any tool returns
+AGENT_MAX_INPUT_CHARS = int(os.getenv("AGENT_MAX_INPUT_CHARS", "2000"))
+AGENT_RUN_TIMEOUT_SECONDS = int(os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "180"))  # hard cap for one answer
+# Event stream (Redis Streams) — same Redis server as Celery, separate DB index
+# and key prefix so broker data on /0 is untouched.
+AGENT_REDIS_URL = f"{REDIS_URL}/1"
+AGENT_STREAM_TTL_SECONDS = int(os.getenv("AGENT_STREAM_TTL_SECONDS", "3600"))

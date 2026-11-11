@@ -564,6 +564,22 @@ def get_filtered_invoices(
     )
 
 
+def get_filtered_invoices_lean(**filters) -> "QuerySet":
+    """
+    Same filters and same default ordering as get_filtered_invoices() (both go
+    through _apply_invoice_filters over non-deleted invoices), but WITHOUT the
+    items / shelf-allocation / audit-user prefetches that _invoice_qs() loads
+    for InvoiceReadSerializer. For callers that only read invoice header
+    columns plus the customer's name/code (e.g. the ai_agent find_invoices
+    tool): 1 query for the page instead of 3, and aggregate() ignores
+    prefetches anyway. Parity with get_filtered_invoices is asserted in
+    ai_agent.tests.test_selector_parity.
+    """
+    return _apply_invoice_filters(
+        Invoice.objects.filter(is_deleted=False).select_related("customer"), **filters,
+    )
+
+
 def _apply_outstanding_filters(
     qs,
     *,

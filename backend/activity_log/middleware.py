@@ -44,3 +44,26 @@ class CurrentUserMiddleware:
             return self.get_response(request)
         finally:
             _state.request = None
+
+
+class acting_as:
+    """
+    Context manager: attribute tracked writes made inside the block to `user`
+    when there is no HTTP request (e.g. the ai_agent Celery worker running
+    catch-up-on-read selectors on behalf of the user who asked). Purely
+    additive — request handling above is unchanged. Thread-local, so it must
+    be entered in the SAME thread that performs the writes.
+    """
+
+    def __init__(self, user):
+        self._user = user
+        self._previous = None
+
+    def __enter__(self):
+        self._previous = getattr(_state, "request", None)
+        _state.request = type("_ActingRequest", (), {"user": self._user})()
+        return self
+
+    def __exit__(self, *exc):
+        _state.request = self._previous
+        return False

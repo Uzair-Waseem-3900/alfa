@@ -1,6 +1,6 @@
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
-import { Menu } from 'lucide-react';
+import { Menu, Sparkles } from 'lucide-react';
 import Button from '../ui/Button';
 
 const ROLE_LABELS = { superuser: 'Superuser', admin: 'Admin' };
@@ -19,6 +19,18 @@ const Header = ({ user, onToggleSidebar, onLogout }) => {
                 </button>
 
                 <div className="flex items-center gap-2 sm:gap-4">
+                    {/* AI assistant — admins and superusers only (the page redirects everyone else) */}
+                    {(user?.role === 'admin' || user?.role === 'superuser') && (
+                        <Link
+                            to="/agent"
+                            title="Open the AI assistant"
+                            aria-label="Open the AI assistant"
+                            className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-700 to-accent-600 px-3 sm:px-4 min-h-[40px] text-sm font-medium text-white shadow-sm hover:from-primary-800 hover:to-accent-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+                        >
+                            <Sparkles className="w-4 h-4" aria-hidden="true" />
+                            <span className="hidden sm:inline">Assistant</span>
+                        </Link>
+                    )}
                     <Link
                         to="/profile"
                         title="View profile"

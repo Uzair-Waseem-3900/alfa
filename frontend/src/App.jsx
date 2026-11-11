@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -164,6 +165,11 @@ import ActivityLogPage from './pages/ActivityLogPage';
 
 // Cash Calculator (frontend-only utility, all roles)
 import CashCalculatorPage from './pages/cashCalculator/CashCalculatorPage';
+
+import LoadingSpinner from './components/ui/LoadingSpinner';
+
+// Lazy: pulls in the markdown renderer + SSE client, which no other page needs.
+const AgentPage = lazy(() => import('./pages/agent/AgentPage'));
 
 import './App.css';
 
@@ -1187,6 +1193,18 @@ const AppContent = () => {
             <Layout>
               <CashCalculatorPage />
             </Layout>
+          </ProtectedRoute>
+        } />
+
+        {/* AI assistant — its own full-screen layout (chat history sidebar +
+            "Back to software"), so deliberately NOT wrapped in <Layout>.
+            One route with an optional :chatId so selecting/creating a chat
+            never remounts the page. */}
+        <Route path="/agent/:chatId?" element={
+          <ProtectedRoute>
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>
+              <AgentPage />
+            </Suspense>
           </ProtectedRoute>
         } />
 

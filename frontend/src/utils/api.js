@@ -61,6 +61,16 @@ const performTokenRefresh = () => {
         });
 };
 
+// For non-axios callers (the agent's fetch-based SSE stream): reuses the SAME
+// single in-flight refresh, so a stream and a regular request that both hit an
+// expired token never race to spend the rotated refresh token.
+export const refreshAccessToken = () => {
+    if (!refreshPromise) {
+        refreshPromise = performTokenRefresh();
+    }
+    return refreshPromise;
+};
+
 // Response interceptor
 apiClient.interceptors.response.use(
     (response) => response.data,

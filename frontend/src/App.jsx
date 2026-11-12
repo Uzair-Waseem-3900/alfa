@@ -1,11 +1,12 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { useKeepAlive } from './hooks/useKeepAlive';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import Layout from './components/layout/Layout';
+import PageTransition from './components/ui/PageTransition';
 import Login from './pages/Login';
 import Users from './pages/Users';
 import Profile from './pages/Profile';
@@ -175,10 +176,16 @@ import './App.css';
 
 const AppContent = () => {
   const { isAuthenticated } = useAuth();
+  const location = useLocation();
+
+  // Animate only when switching between the AI agent and the rest of the app.
+  // Using the route-group key (agent vs app) means normal in-app navigation
+  // stays instant while the agent ↔ software transition gets the full animation.
+  const routeGroup = location.pathname.startsWith('/agent') ? 'agent' : 'app';
 
   return (
-    <AnimatePresence mode="wait">
-      <Routes>
+    <AnimatePresence mode="wait" initial={false}>
+      <Routes location={location} key={routeGroup}>
         {/* Auth Routes */}
         <Route path="/login" element={
           isAuthenticated ? <Navigate to="/dashboard" /> : <Login />
@@ -1203,7 +1210,9 @@ const AppContent = () => {
         <Route path="/agent/:chatId?" element={
           <ProtectedRoute>
             <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>
-              <AgentPage />
+              <PageTransition variant="agent">
+                <AgentPage />
+              </PageTransition>
             </Suspense>
           </ProtectedRoute>
         } />

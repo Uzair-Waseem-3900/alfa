@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import Sidebar from './Sidebar';
 import Header from './Header';
+import PageTransition from '../ui/PageTransition';
 
 const LG_BREAKPOINT = 1024;
 
@@ -19,20 +20,22 @@ const Layout = ({ children }) => {
     };
 
     return (
-        <div className="min-h-screen bg-neutral-50">
-            <Sidebar
-                desktopOpen={sidebarOpen}
-                mobileOpen={mobileOpen}
-                onCloseMobile={() => setMobileOpen(false)}
-            />
+        <PageTransition variant="app">
+            <div className="min-h-screen bg-neutral-50">
+                <Sidebar
+                    desktopOpen={sidebarOpen}
+                    mobileOpen={mobileOpen}
+                    onCloseMobile={() => setMobileOpen(false)}
+                />
 
-            <div className={`transition-all duration-300 ml-0 ${sidebarOpen ? 'lg:ml-64' : 'lg:ml-20'}`}>
-                <Header user={user} onToggleSidebar={handleToggleSidebar} onLogout={logout} />
-                <main className="p-4 sm:p-6">
-                    {children}
-                </main>
+                <div className={`transition-all duration-300 ml-0 ${sidebarOpen ? 'lg:ml-64' : 'lg:ml-20'}`}>
+                    <Header user={user} onToggleSidebar={handleToggleSidebar} onLogout={logout} />
+                    <main className="p-4 sm:p-6">
+                        {children}
+                    </main>
+                </div>
             </div>
-        </div>
+        </PageTransition>
     );
 };
 

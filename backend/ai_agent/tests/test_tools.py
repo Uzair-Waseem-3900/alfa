@@ -88,6 +88,11 @@ class PromptTests(SimpleTestCase):
         self.assertIn("Today:", text.splitlines()[-1])
         self.assertIn("Awaab Sohail (admin)", text.splitlines()[-1])
         self.assertTrue(all(t in text for t in TOPICS))
+        # Regression: "who built you / about the company" was answered with the
+        # "no tool can answer" fallback because nothing said `about` covers it.
+        self.assertIn('call get_guide("about")', text)
+        self.assertIn("about (you, the company, the developer)", text)
+        self.assertLess(text.index('get_guide("about")'), text.index("If no tool or guide can answer"))
         self.assertLess(len(text) // 4, 500, "base prompt must stay small (~tokens)")
 
 

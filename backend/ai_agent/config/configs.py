@@ -9,7 +9,7 @@ loop breaks when reused from a later one.
 from agents import AsyncOpenAI, OpenAIChatCompletionsModel, set_tracing_disabled
 from django.conf import settings
 
-from .gemini_compat import patch_streaming_tool_indexes
+from .gemini_compat import patch_gemini_client
 
 # Tracing would try to upload to OpenAI, which we don't use.
 set_tracing_disabled(True)
@@ -22,7 +22,7 @@ def build_model(model_name: str | None = None) -> OpenAIChatCompletionsModel:
         max_retries=2,
         timeout=60.0,
     )
-    patch_streaming_tool_indexes(client)   # Gemini omits tool_call.index when streaming
+    patch_gemini_client(client)   # see gemini_compat: missing tool-call index, empty completions
     return OpenAIChatCompletionsModel(
         openai_client=client,
         model=model_name or settings.AGENT_MODEL,

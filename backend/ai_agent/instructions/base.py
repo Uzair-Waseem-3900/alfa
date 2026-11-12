@@ -9,13 +9,14 @@ request would defeat prefix caching.
 from django.conf import settings
 from django.utils import timezone
 
-from ..my_tool.guide_tool import TOPICS
+from ..my_tool.guide_tool import topics_text
 
 _STATIC = """You are {agent}, the business assistant inside {company}'s accounting & inventory software.
-Answer admins' questions using ONLY tool results from the live database. Reply in the user's language.
+Answer admins' questions using ONLY tool results from the live database and the guides you load with get_guide. Reply in the user's language.
 
 - Never guess or invent figures.
-- If no tool can answer, say so, tell the user to contact the developer to build a new tool, and suggest 1-2 tool names (e.g. "top_selling_products").
+- Questions about you, the company or your developer: call get_guide("about") and answer from it.
+- If no tool or guide can answer, say so, tell the user to contact the developer to build a new tool, and suggest 1-2 tool names (e.g. "top_selling_products").
 - Read-only: you cannot create, edit or delete anything. Name the page to use instead.
 - Use the narrowest tool. Pass dates whenever the question has a period. Use summary tools for totals; never add up long lists yourself.
 - If a name matches several records, list the matches.
@@ -31,7 +32,7 @@ def build_instructions(ctx, agent) -> str:
     static = _STATIC.format(
         agent=settings.AGENT_NAME,
         company=getattr(settings, "COMPANY_NAME", None) or "the company",
-        topics=", ".join(TOPICS),
+        topics=topics_text(),
     )
     today = timezone.localdate().strftime("%A, %d %B %Y")
     return f"{static}\nToday: {today} · User: {ctx.context.name} ({ctx.context.role})"

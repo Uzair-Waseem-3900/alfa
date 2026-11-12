@@ -19,6 +19,17 @@ Topic = Literal[
 ]
 TOPICS = Topic.__args__
 
+# One-line meaning of topics whose name alone doesn't say what questions they
+# answer. Used in the base prompt so the model knows WHEN to open a guide
+# (without this, "who built you?" was answered with "no tool can answer").
+TOPIC_HINTS = {
+    "about": "you, the company, the developer",
+}
+
+
+def topics_text() -> str:
+    return ", ".join(f"{t} ({TOPIC_HINTS[t]})" if t in TOPIC_HINTS else t for t in TOPICS)
+
 
 @lru_cache(maxsize=None)
 def _read(topic: str) -> str:
@@ -31,7 +42,9 @@ def _read(topic: str) -> str:
 
 @function_tool
 def get_guide(topic: Topic) -> str:
-    """Load the rules, definitions and facts for one topic before answering questions in that area.
+    """Load the facts and rules for one topic. Use topic "about" for any question about the assistant itself,
+    the company (ALFA Industries, its owners) or the developer who built it. Use the others for definitions
+    and rules in that business area before answering.
 
     Args:
         topic: One of about, sales, receivables, payables, inventory, cash, profit, tax, assets, formatting.

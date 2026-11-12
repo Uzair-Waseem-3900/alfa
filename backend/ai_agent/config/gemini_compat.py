@@ -1,18 +1,35 @@
 """
-Compatibility shim for Gemini's OpenAI-compatible endpoint.
+Compatibility shims for Gemini's OpenAI-compatible endpoint, found in live
+testing (openai-agents 0.24 + gemini-2.5-flash / flash-lite). Applied only to
+the Gemini client.
 
-Problem (found in live testing, openai-agents 0.24 + gemini-2.5-flash):
-Gemini streams each tool call COMPLETE in its own chunk but leaves
-`tool_calls[].index` as None. The Agents SDK groups streamed tool-call
-fragments by `index`, so two tool calls in one turn were merged into a single
-call with concatenated arguments (e.g. '{}{"limit":1}'). That corrupt call is
-sent back on the next request and Gemini rejects it with HTTP 400
-INVALID_ARGUMENT.
+1. Missing tool-call index (streaming).
+   Gemini streams each tool call COMPLETE in its own chunk but leaves
+   `tool_calls[].index` as None. The Agents SDK groups streamed tool-call
+   fragments by `index`, so two tool calls in one turn were merged into one call
+   with concatenated arguments (e.g. '{}{"limit":1}'), which Gemini then rejects
+   with HTTP 400 INVALID_ARGUMENT on the next request.
+   Fix: give every distinct tool-call id its own index as chunks pass through.
 
-Fix: give every distinct tool-call id its own index as chunks pass through.
-Applied only to the Gemini client; non-streaming responses are untouched.
+2. Empty completion after a tool result.
+   With tools attached, Gemini sometimes returns NOTHING (no text, no tool call,
+   completion_tokens=0, finish_reason "stop") right after a function result. The
+   SDK then ends the run with an empty answer and the user sees a blank bubble.
+   Fix: detect an empty completion and retry (EMPTY_RETRIES times). The retry
+   request gets one extra nudge message appended; the nudge exists only on the
+   wire, it is never stored in the chat session. For streams, the preamble
+   chunks (role-only/empty deltas) are held back until real content arrives, so
+   a retry is invisible to the SDK and the browser.
 """
+import logging
 
+logger = logging.getLogger(__name__)
+
+EMPTY_RETRIES = 2
+NUDGE = {"role": "user", "content": "Please answer the question now, using the information above."}
+
+
+# --- 1. tool-call index -----------------------------------------------------
 
 class _IndexFixedStream:
     """Async-iterable proxy over an openai AsyncStream that repairs tool-call indexes."""
@@ -51,13 +68,92 @@ class _IndexFixedStream:
         return getattr(self._stream, name)
 
 
-def patch_streaming_tool_indexes(client) -> None:
-    """Wrap client.chat.completions.create so streamed responses get fixed indexes."""
+# --- 2. empty completion ----------------------------------------------------
+
+def _chunk_has_payload(chunk) -> bool:
+    for choice in chunk.choices or []:
+        delta = choice.delta
+        if delta is not None and (delta.content or delta.tool_calls or getattr(delta, "refusal", None)):
+            return True
+    return False
+
+
+def _completion_is_empty(response) -> bool:
+    if not response.choices:
+        return True
+    message = response.choices[0].message
+    return not (message.content or message.tool_calls)
+
+
+def _retry_kwargs(kwargs: dict) -> dict:
+    retry = dict(kwargs)
+    retry["messages"] = [*kwargs["messages"], NUDGE]
+    return retry
+
+
+class _GuardedStream:
+    """Fixes tool-call indexes and retries when the model produces nothing."""
+
+    def __init__(self, original, args, kwargs, first_stream):
+        self._original, self._args, self._kwargs, self._first = original, args, kwargs, first_stream
+        self._current = first_stream
+
+    def __aiter__(self):
+        return self._iterate()
+
+    async def _iterate(self):
+        stream = self._first
+        for attempt in range(EMPTY_RETRIES + 1):
+            self._current = stream
+            held, started = [], False
+            async for chunk in _IndexFixedStream(stream):
+                if started:
+                    yield chunk
+                    continue
+                held.append(chunk)
+                if _chunk_has_payload(chunk):          # real content: release what we held back
+                    started = True
+                    for h in held:
+                        yield h
+                    held = []
+            if started:
+                return
+            if attempt == EMPTY_RETRIES:               # give up: let the SDK see the empty completion
+                for h in held:
+                    yield h
+                return
+            logger.warning("Gemini returned an empty streamed completion; retrying (%d/%d)", attempt + 1, EMPTY_RETRIES)
+            stream = await self._original(*self._args, **_retry_kwargs(self._kwargs))
+
+    async def aclose(self):
+        close = getattr(self._current, "close", None)
+        if close is not None:
+            result = close()
+            if hasattr(result, "__await__"):
+                await result
+
+    def __getattr__(self, name):
+        return getattr(self._current, name)
+
+
+async def _retry_if_empty(original, args, kwargs, response):
+    for attempt in range(EMPTY_RETRIES):
+        if not _completion_is_empty(response):
+            break
+        logger.warning("Gemini returned an empty completion; retrying (%d/%d)", attempt + 1, EMPTY_RETRIES)
+        response = await original(*args, **_retry_kwargs(kwargs))
+    return response
+
+
+def patch_gemini_client(client) -> None:
+    """Wrap client.chat.completions.create with both shims above."""
     completions = client.chat.completions
     original = completions.create
 
     async def create(*args, **kwargs):
         result = await original(*args, **kwargs)
-        return _IndexFixedStream(result) if kwargs.get("stream") else result
+        if kwargs.get("stream"):
+            return _GuardedStream(original, args, kwargs, result)
+        return await _retry_if_empty(original, args, kwargs, result)
 
     completions.create = create

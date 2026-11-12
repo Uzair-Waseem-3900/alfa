@@ -3,16 +3,23 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
-from ai_agent.config.gemini_compat import _IndexFixedStream, patch_streaming_tool_indexes
+from ai_agent.config.gemini_compat import (
+    EMPTY_RETRIES, NUDGE, _GuardedStream, _IndexFixedStream, patch_gemini_client,
+)
 
 
-def chunk(*calls):
-    """A streamed chunk carrying the given tool-call deltas."""
-    return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=list(calls)))])
+def chunk(*calls, content=None, finish=None):
+    """A streamed chunk carrying the given tool-call deltas and/or text."""
+    delta = SimpleNamespace(tool_calls=list(calls) or None, content=content, refusal=None)
+    return SimpleNamespace(choices=[SimpleNamespace(delta=delta, finish_reason=finish)])
 
 
 def call(id=None, index=None, args=""):
     return SimpleNamespace(id=id, index=index, function=SimpleNamespace(name="t", arguments=args))
+
+
+def response(content=None, tool_calls=None):
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content, tool_calls=tool_calls))])
 
 
 async def aiter(items):
@@ -39,16 +46,100 @@ class IndexShimTests(SimpleTestCase):
         self.assertEqual(cont.index, first.index)
 
     def test_chunks_without_tool_calls_pass_through(self):
-        plain = SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=None))])
+        plain = SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(tool_calls=None, content="hi"))])
         empty = SimpleNamespace(choices=[])
         out = asyncio.run(collect(_IndexFixedStream(aiter([plain, empty]))))
         self.assertEqual(out, [plain, empty])
 
-    def test_only_streaming_requests_are_wrapped(self):
-        async def original(*a, **kw):
-            return "raw-response" if not kw.get("stream") else aiter([])
 
-        client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=original)))
-        patch_streaming_tool_indexes(client)
-        self.assertEqual(asyncio.run(client.chat.completions.create(stream=False)), "raw-response")
-        self.assertIsInstance(asyncio.run(client.chat.completions.create(stream=True)), _IndexFixedStream)
+class FakeCompletions:
+    """Stands in for client.chat.completions; hands out scripted results and records requests."""
+
+    def __init__(self, results):
+        self.results, self.requests = list(results), []
+
+    async def create(self, *args, **kwargs):
+        self.requests.append(kwargs)
+        return self.results[min(len(self.requests), len(self.results)) - 1]
+
+
+def make_client(results):
+    completions = FakeCompletions(results)
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    patch_gemini_client(client)
+    return client, completions
+
+
+MESSAGES = [{"role": "user", "content": "Who built you?"}, {"role": "tool", "content": "guide text"}]
+
+
+class EmptyCompletionRetryTests(SimpleTestCase):
+    # --- non-streaming ---------------------------------------------------
+    def test_non_stream_retries_once_with_a_nudge_then_returns_the_answer(self):
+        good = response(content="Uzair Waseem built me.")
+        client, fake = make_client([response(), good])
+        result = asyncio.run(client.chat.completions.create(messages=list(MESSAGES)))
+        self.assertIs(result, good)
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(fake.requests[0]["messages"], MESSAGES)                 # first request untouched
+        self.assertEqual(fake.requests[1]["messages"], [*MESSAGES, NUDGE])      # retry carries the nudge
+
+    def test_non_stream_good_answer_is_not_retried(self):
+        client, fake = make_client([response(content="hello")])
+        asyncio.run(client.chat.completions.create(messages=list(MESSAGES)))
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_non_stream_tool_call_counts_as_a_valid_completion(self):
+        client, fake = make_client([response(tool_calls=[object()])])
+        asyncio.run(client.chat.completions.create(messages=list(MESSAGES)))
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_non_stream_gives_up_after_the_retry_budget(self):
+        empty = response()
+        client, fake = make_client([empty])
+        result = asyncio.run(client.chat.completions.create(messages=list(MESSAGES)))
+        self.assertIs(result, empty)
+        self.assertEqual(len(fake.requests), 1 + EMPTY_RETRIES)
+
+    # --- streaming ---------------------------------------------------------
+    def test_stream_empty_attempt_is_invisible_and_retried(self):
+        empty_stream = aiter([chunk(), chunk(finish="stop")])                      # preamble + finish, no content
+        good = [chunk(), chunk(content="Uzair"), chunk(content=" built me", finish="stop")]
+        client, fake = make_client([empty_stream, aiter(good)])
+
+        stream = asyncio.run(client.chat.completions.create(messages=list(MESSAGES), stream=True))
+        self.assertIsInstance(stream, _GuardedStream)
+        got = asyncio.run(collect(stream))
+
+        self.assertEqual(got, good)                                                # only the retry's chunks reach the SDK
+        self.assertEqual(len(fake.requests), 2)
+        self.assertEqual(fake.requests[1]["messages"], [*MESSAGES, NUDGE])
+        self.assertTrue(fake.requests[1]["stream"])
+
+    def test_stream_with_content_is_not_retried_and_keeps_order(self):
+        chunks = [chunk(), chunk(content="a"), chunk(content="b"), chunk(finish="stop")]
+        client, fake = make_client([aiter(chunks)])
+        got = asyncio.run(collect(asyncio.run(client.chat.completions.create(messages=list(MESSAGES), stream=True))))
+        self.assertEqual(got, chunks)
+        self.assertEqual(len(fake.requests), 1)
+
+    def test_stream_tool_call_counts_as_content_and_gets_an_index(self):
+        tc = call("function-call-A", args="{}")
+        client, fake = make_client([aiter([chunk(), chunk(tc), chunk(finish="tool_calls")])])
+        got = asyncio.run(collect(asyncio.run(client.chat.completions.create(messages=list(MESSAGES), stream=True))))
+        self.assertEqual(len(got), 3)
+        self.assertEqual(len(fake.requests), 1)
+        self.assertEqual(tc.index, 0)
+
+    def test_stream_gives_up_after_the_retry_budget_and_passes_the_empty_stream_through(self):
+        def empty():
+            return aiter([chunk(), chunk(finish="stop")])
+        client, fake = make_client([empty(), empty(), empty()])
+        got = asyncio.run(collect(asyncio.run(client.chat.completions.create(messages=list(MESSAGES), stream=True))))
+        self.assertEqual(len(fake.requests), 1 + EMPTY_RETRIES)
+        self.assertEqual(len(got), 2)                                              # the SDK still sees a normal (empty) finish
+
+    def test_only_streaming_requests_get_the_stream_wrapper(self):
+        client, _ = make_client([response(content="x"), aiter([chunk(content="x")])])
+        self.assertNotIsInstance(asyncio.run(client.chat.completions.create(messages=[])), _GuardedStream)
+        self.assertIsInstance(asyncio.run(client.chat.completions.create(messages=[], stream=True)), _GuardedStream)

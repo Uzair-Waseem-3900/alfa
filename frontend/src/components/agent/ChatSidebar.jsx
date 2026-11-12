@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import { AnimatePresence, motion } from 'framer-motion';
 import { differenceInCalendarDays, isToday, isYesterday } from 'date-fns';
 import { Check, Loader2, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, X } from 'lucide-react';
 import ConfirmDialog from '../ui/ConfirmDialog';
@@ -7,13 +8,37 @@ import InlineAlert from '../ui/InlineAlert';
 
 const GROUP_ORDER = ['Today', 'Yesterday', 'Previous 7 days', 'Older'];
 
-// Grouping is display-only, in the viewer's local calendar days.
 const groupLabel = (isoDate) => {
     const d = new Date(isoDate);
     if (isToday(d)) return 'Today';
     if (isYesterday(d)) return 'Yesterday';
     return differenceInCalendarDays(new Date(), d) <= 7 ? 'Previous 7 days' : 'Older';
 };
+
+// ─── animation variants ────────────────────────────────────────────────────
+
+const sidebarVariants = {
+    open:   { x: 0,    opacity: 1, transition: { type: 'spring', stiffness: 320, damping: 30 } },
+    closed: { x: '-100%', opacity: 0, transition: { type: 'spring', stiffness: 320, damping: 32 } },
+};
+
+const listContainer = {
+    hidden: {},
+    show: { transition: { staggerChildren: 0.045 } },
+};
+
+const listItem = {
+    hidden: { opacity: 0, x: -14 },
+    show:   { opacity: 1, x: 0, transition: { type: 'spring', stiffness: 380, damping: 28 } },
+};
+
+const dropdownVariants = {
+    hidden: { opacity: 0, scale: 0.88, y: -6, transformOrigin: 'top right' },
+    show:   { opacity: 1, scale: 1,    y: 0,  transition: { type: 'spring', stiffness: 420, damping: 26 } },
+    exit:   { opacity: 0, scale: 0.88, y: -6, transition: { duration: 0.14, ease: 'easeIn' } },
+};
+
+// ─── ChatItem ──────────────────────────────────────────────────────────────
 
 const ChatItem = ({ chat, active, onSelect, onRename, onAskDelete }) => {
     const [menuOpen, setMenuOpen] = useState(false);
@@ -41,7 +66,11 @@ const ChatItem = ({ chat, active, onSelect, onRename, onAskDelete }) => {
 
     if (editing) {
         return (
-            <div className="flex items-center gap-1 rounded-lg bg-white border border-accent-500 px-2 py-1">
+            <motion.div
+                initial={{ opacity: 0, scale: 0.97 }}
+                animate={{ opacity: 1, scale: 1 }}
+                className="flex items-center gap-1 rounded-lg bg-white border border-accent-500 px-2 py-1"
+            >
                 <input
                     autoFocus
                     value={draft}
@@ -54,19 +83,47 @@ const ChatItem = ({ chat, active, onSelect, onRename, onAskDelete }) => {
                     }}
                     className="flex-1 min-w-0 bg-transparent py-1.5 text-base sm:text-sm text-neutral-900 focus:outline-none"
                 />
-                <button type="button" onClick={commitRename} aria-label="Save name" className="w-9 h-9 flex items-center justify-center rounded-md text-success-700 hover:bg-success-50 cursor-pointer">
+                <motion.button
+                    whileTap={{ scale: 0.88 }}
+                    type="button" onClick={commitRename} aria-label="Save name"
+                    className="w-9 h-9 flex items-center justify-center rounded-md text-success-700 hover:bg-success-50 cursor-pointer"
+                >
                     <Check className="w-4 h-4" />
-                </button>
-                <button type="button" onClick={() => setEditing(false)} aria-label="Cancel rename" className="w-9 h-9 flex items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 cursor-pointer">
+                </motion.button>
+                <motion.button
+                    whileTap={{ scale: 0.88 }}
+                    type="button" onClick={() => setEditing(false)} aria-label="Cancel rename"
+                    className="w-9 h-9 flex items-center justify-center rounded-md text-neutral-500 hover:bg-neutral-100 cursor-pointer"
+                >
                     <X className="w-4 h-4" />
-                </button>
-            </div>
+                </motion.button>
+            </motion.div>
         );
     }
 
     return (
-        <div className={`group relative flex items-center rounded-lg transition-colors ${active ? 'bg-primary-100/70' : 'hover:bg-neutral-100'}`}>
-            <button
+        <motion.div
+            variants={listItem}
+            layout
+            className={`group relative flex items-center rounded-lg transition-colors ${active ? 'bg-primary-100/70' : 'hover:bg-neutral-100'}`}
+        >
+            {/* Active indicator bar */}
+            <AnimatePresence>
+                {active && (
+                    <motion.span
+                        layoutId="active-chat-bar"
+                        initial={{ scaleY: 0, opacity: 0 }}
+                        animate={{ scaleY: 1, opacity: 1 }}
+                        exit={{ scaleY: 0, opacity: 0 }}
+                        transition={{ type: 'spring', stiffness: 500, damping: 32 }}
+                        className="absolute left-0 inset-y-2 w-[3px] rounded-full bg-primary-600"
+                        aria-hidden="true"
+                    />
+                )}
+            </AnimatePresence>
+
+            <motion.button
+                whileTap={{ scale: 0.97 }}
                 type="button"
                 onClick={() => onSelect(chat.id)}
                 aria-current={active ? 'page' : undefined}
@@ -74,40 +131,53 @@ const ChatItem = ({ chat, active, onSelect, onRename, onAskDelete }) => {
             >
                 <MessageSquare className={`w-4 h-4 flex-shrink-0 ${active ? 'text-primary-700' : 'text-neutral-400'}`} aria-hidden="true" />
                 <span className={`truncate text-sm ${active ? 'font-semibold text-primary-900' : 'text-neutral-700'}`}>{chat.title}</span>
-            </button>
+            </motion.button>
 
             <div ref={menuRef} className="relative">
-                <button
+                <motion.button
+                    whileTap={{ scale: 0.88, rotate: 90 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 20 }}
                     type="button"
                     aria-label={`Options for ${chat.title}`}
                     aria-haspopup="menu"
                     aria-expanded={menuOpen}
                     onClick={() => setMenuOpen((o) => !o)}
-                    // Always visible on touch screens (no hover there); revealed on hover/focus on desktop.
                     className={`w-11 h-11 flex items-center justify-center rounded-lg text-neutral-500 hover:bg-neutral-200/70 cursor-pointer transition-opacity md:opacity-0 md:group-hover:opacity-100 md:focus-visible:opacity-100 ${menuOpen ? 'md:!opacity-100' : ''}`}
                 >
                     <MoreHorizontal className="w-5 h-5" />
-                </button>
-                {menuOpen && (
-                    <div role="menu" className="absolute right-0 top-11 z-20 w-40 rounded-xl border border-neutral-200 bg-white p-1 shadow-dropdown">
-                        <button
-                            type="button" role="menuitem"
-                            onClick={() => { setMenuOpen(false); setDraft(chat.title); setEditing(true); }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 min-h-[44px] text-sm text-neutral-700 hover:bg-neutral-100 cursor-pointer"
+                </motion.button>
+
+                <AnimatePresence>
+                    {menuOpen && (
+                        <motion.div
+                            role="menu"
+                            variants={dropdownVariants}
+                            initial="hidden"
+                            animate="show"
+                            exit="exit"
+                            className="absolute right-0 top-11 z-20 w-40 rounded-xl border border-neutral-200 bg-white p-1 shadow-dropdown"
                         >
-                            <Pencil className="w-4 h-4" /> Rename
-                        </button>
-                        <button
-                            type="button" role="menuitem"
-                            onClick={() => { setMenuOpen(false); onAskDelete(chat); }}
-                            className="flex w-full items-center gap-2 rounded-lg px-3 min-h-[44px] text-sm text-error-600 hover:bg-error-50 cursor-pointer"
-                        >
-                            <Trash2 className="w-4 h-4" /> Delete
-                        </button>
-                    </div>
-                )}
+                            <motion.button
+                                whileTap={{ scale: 0.96 }}
+                                type="button" role="menuitem"
+                                onClick={() => { setMenuOpen(false); setDraft(chat.title); setEditing(true); }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 min-h-[44px] text-sm text-neutral-700 hover:bg-neutral-100 cursor-pointer"
+                            >
+                                <Pencil className="w-4 h-4" /> Rename
+                            </motion.button>
+                            <motion.button
+                                whileTap={{ scale: 0.96 }}
+                                type="button" role="menuitem"
+                                onClick={() => { setMenuOpen(false); onAskDelete(chat); }}
+                                className="flex w-full items-center gap-2 rounded-lg px-3 min-h-[44px] text-sm text-error-600 hover:bg-error-50 cursor-pointer"
+                            >
+                                <Trash2 className="w-4 h-4" /> Delete
+                            </motion.button>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
-        </div>
+        </motion.div>
     );
 };
 
@@ -118,6 +188,8 @@ ChatItem.propTypes = {
     onRename: PropTypes.func.isRequired,
     onAskDelete: PropTypes.func.isRequired,
 };
+
+// ─── ChatSidebar ───────────────────────────────────────────────────────────
 
 const ChatSidebar = ({
     open, onClose, chats, loading, error, onRetry, activeId, hasMore, loadingMore, onLoadMore,
@@ -145,52 +217,98 @@ const ChatSidebar = ({
 
     return (
         <>
-            {/* Mobile scrim — closes the drawer */}
-            {open && (
-                <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={onClose} aria-hidden="true" />
-            )}
+            {/* Mobile scrim */}
+            <AnimatePresence>
+                {open && (
+                    <motion.div
+                        key="scrim"
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        transition={{ duration: 0.2 }}
+                        className="fixed inset-0 z-30 bg-black/50 md:hidden"
+                        onClick={onClose}
+                        aria-hidden="true"
+                    />
+                )}
+            </AnimatePresence>
 
-            <aside
+            {/* Sidebar panel — always in DOM on md+, animated on mobile */}
+            <motion.aside
                 aria-label="Chat history"
-                className={`fixed md:relative inset-y-0 left-0 z-40 w-[85vw] max-w-xs md:max-w-none md:w-72 flex flex-col bg-neutral-50 border-r border-neutral-200 transition-transform duration-200 ease-out motion-reduce:transition-none ${open ? 'translate-x-0' : '-translate-x-full md:hidden'}`}
+                variants={sidebarVariants}
+                animate={open ? 'open' : 'closed'}
+                className={`fixed md:relative inset-y-0 left-0 z-40 w-[85vw] max-w-xs md:max-w-none md:w-72 flex flex-col bg-neutral-50 border-r border-neutral-200 motion-reduce:transition-none
+                    ${open ? 'md:flex' : 'md:hidden'}`}
+                style={{ translateX: undefined }} // let framer-motion control x on mobile, CSS on md+
             >
                 <div className="flex items-center gap-2 p-3">
-                    <button
+                    {/* New Chat button */}
+                    <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.96 }}
+                        transition={{ type: 'spring', stiffness: 500, damping: 22 }}
                         type="button"
                         onClick={onNewChat}
                         className="flex-1 flex items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 min-h-[44px] text-sm font-semibold text-neutral-800 hover:bg-neutral-50 hover:border-neutral-400 shadow-sm cursor-pointer transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
                     >
-                        <Plus className="w-4 h-4" /> New chat
-                    </button>
-                    <button
+                        <motion.span
+                            whileTap={{ rotate: 90 }}
+                            transition={{ type: 'spring', stiffness: 600, damping: 18 }}
+                            className="inline-flex"
+                        >
+                            <Plus className="w-4 h-4" />
+                        </motion.span>
+                        New chat
+                    </motion.button>
+
+                    <motion.button
+                        whileTap={{ scale: 0.9 }}
                         type="button" onClick={onClose} aria-label="Close chat history"
                         className="md:hidden w-11 h-11 flex items-center justify-center rounded-xl text-neutral-500 hover:bg-neutral-100 cursor-pointer"
                     >
                         <X className="w-5 h-5" />
-                    </button>
+                    </motion.button>
                 </div>
 
                 <nav className="flex-1 overflow-y-auto overscroll-contain px-2 pb-4">
                     {loading ? (
                         <div className="space-y-2 px-1 pt-2" aria-hidden="true">
                             {[70, 55, 80, 50, 65].map((w, i) => (
-                                <div key={i} className="h-9 rounded-lg bg-neutral-200/70 animate-pulse motion-reduce:animate-none" style={{ width: `${w}%` }} />
+                                <motion.div
+                                    key={i}
+                                    initial={{ opacity: 0 }}
+                                    animate={{ opacity: 1 }}
+                                    transition={{ delay: i * 0.06 }}
+                                    className="h-9 rounded-lg bg-neutral-200/70 animate-pulse motion-reduce:animate-none"
+                                    style={{ width: `${w}%` }}
+                                />
                             ))}
                         </div>
                     ) : error ? (
                         <InlineAlert message={error} onRetry={onRetry} className="mx-1" />
                     ) : chats.length === 0 ? (
-                        <div className="px-4 py-10 text-center">
+                        <motion.div
+                            initial={{ opacity: 0, y: 12 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ delay: 0.1 }}
+                            className="px-4 py-10 text-center"
+                        >
                             <MessageSquare className="w-8 h-8 mx-auto text-neutral-300" aria-hidden="true" />
                             <p className="mt-3 text-sm font-medium text-neutral-700">No conversations yet</p>
                             <p className="mt-1 text-xs text-neutral-500">Start a new chat and ask about your business.</p>
-                        </div>
+                        </motion.div>
                     ) : (
                         <>
                             {groups.map(({ label, items }) => (
                                 <section key={label} className="mb-3">
                                     <h3 className="px-3 pt-2 pb-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">{label}</h3>
-                                    <div className="space-y-0.5">
+                                    <motion.div
+                                        className="space-y-0.5"
+                                        variants={listContainer}
+                                        initial="hidden"
+                                        animate="show"
+                                    >
                                         {items.map((chat) => (
                                             <ChatItem
                                                 key={chat.id}
@@ -201,29 +319,30 @@ const ChatSidebar = ({
                                                 onAskDelete={setToDelete}
                                             />
                                         ))}
-                                    </div>
+                                    </motion.div>
                                 </section>
                             ))}
                             {hasMore && (
-                                <button
+                                <motion.button
+                                    whileTap={{ scale: 0.97 }}
                                     type="button" onClick={onLoadMore} disabled={loadingMore}
                                     className="w-full flex items-center justify-center gap-2 rounded-lg min-h-[44px] text-sm font-medium text-primary-700 hover:bg-neutral-100 cursor-pointer disabled:opacity-60"
                                 >
                                     {loadingMore && <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />}
                                     Show older chats
-                                </button>
+                                </motion.button>
                             )}
                         </>
                     )}
                 </nav>
-            </aside>
+            </motion.aside>
 
             <ConfirmDialog
                 isOpen={!!toDelete}
                 onClose={() => !deleting && setToDelete(null)}
                 onConfirm={confirmDelete}
                 title="Delete this chat?"
-                message={toDelete ? `“${toDelete.title}” and its messages will be removed from your history.` : ''}
+                message={toDelete ? `"${toDelete.title}" and its messages will be removed from your history.` : ''}
                 confirmText="Delete"
                 loading={deleting}
             />

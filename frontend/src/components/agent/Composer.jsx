@@ -1,13 +1,14 @@
 import { useRef, useState } from 'react';
 import PropTypes from 'prop-types';
+import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp, Loader2 } from 'lucide-react';
 
-const MAX_CHARS = 2000;      // mirrors AGENT_MAX_INPUT_CHARS on the backend
+const MAX_CHARS    = 2000;
 const MAX_HEIGHT_PX = 160;
 
 const Composer = ({ onSend, disabled, busy, assistantName }) => {
-    const [value, setValue] = useState('');
-    const textareaRef = useRef(null);
+    const [value, setValue]   = useState('');
+    const textareaRef         = useRef(null);
     const canSend = !disabled && !busy && value.trim().length > 0;
 
     const resize = () => {
@@ -25,12 +26,13 @@ const Composer = ({ onSend, disabled, busy, assistantName }) => {
     };
 
     const handleKeyDown = (e) => {
-        // Enter sends, Shift+Enter = new line; never send mid-IME composition.
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             submit();
         }
     };
+
+    const nearLimit = value.length > MAX_CHARS * 0.8;
 
     return (
         <div className="px-3 sm:px-4 pt-2 pb-3 bg-gradient-to-t from-white via-white to-white/0">
@@ -49,23 +51,64 @@ const Composer = ({ onSend, disabled, busy, assistantName }) => {
                     onChange={(e) => { setValue(e.target.value); resize(); }}
                     onKeyDown={handleKeyDown}
                     placeholder={`Ask ${assistantName} about your business…`}
-                    // 16px: anything smaller makes iOS Safari zoom the page on focus.
                     className="flex-1 resize-none bg-transparent px-2 py-2.5 text-base leading-6 text-neutral-900 placeholder:text-neutral-400 focus:outline-none disabled:opacity-60"
                     style={{ maxHeight: MAX_HEIGHT_PX }}
                 />
-                <button
+
+                {/* Send / busy button */}
+                <motion.button
                     type="submit"
                     disabled={!canSend}
                     aria-label={busy ? `${assistantName} is answering` : 'Send message'}
-                    className="w-11 h-11 flex-shrink-0 rounded-xl flex items-center justify-center text-white bg-gradient-to-r from-primary-700 to-accent-600 hover:from-primary-800 hover:to-accent-700 transition-all duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    // Spring scale on press; shrink subtly when disabled
+                    animate={{ scale: canSend ? 1 : 0.92, opacity: canSend ? 1 : 0.4 }}
+                    whileHover={canSend ? { scale: 1.08 } : {}}
+                    whileTap={canSend   ? { scale: 0.9  } : {}}
+                    transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                    className="w-11 h-11 flex-shrink-0 rounded-xl flex items-center justify-center text-white bg-gradient-to-r from-primary-700 to-accent-600 hover:from-primary-800 hover:to-accent-700 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed"
                 >
-                    {busy ? <Loader2 className="w-5 h-5 animate-spin motion-reduce:animate-none" /> : <ArrowUp className="w-5 h-5" />}
-                </button>
+                    <AnimatePresence mode="wait" initial={false}>
+                        {busy ? (
+                            <motion.span
+                                key="busy"
+                                initial={{ opacity: 0, rotate: -90, scale: 0.6 }}
+                                animate={{ opacity: 1, rotate: 0,   scale: 1   }}
+                                exit={{    opacity: 0, rotate:  90, scale: 0.6 }}
+                                transition={{ duration: 0.18 }}
+                            >
+                                <Loader2 className="w-5 h-5 animate-spin motion-reduce:animate-none" />
+                            </motion.span>
+                        ) : (
+                            <motion.span
+                                key="send"
+                                initial={{ opacity: 0, rotate: 90, scale: 0.6 }}
+                                animate={{ opacity: 1, rotate: 0,  scale: 1   }}
+                                exit={{    opacity: 0, rotate: -90, scale: 0.6 }}
+                                transition={{ duration: 0.18 }}
+                            >
+                                <ArrowUp className="w-5 h-5" />
+                            </motion.span>
+                        )}
+                    </AnimatePresence>
+                </motion.button>
             </form>
+
+            {/* Footer hint — character counter fades in when near limit */}
             <p className="max-w-3xl mx-auto mt-2 text-center text-xs text-neutral-500">
-                {value.length > MAX_CHARS * 0.8 && (
-                    <span className="mr-2 font-medium text-warning-700">{value.length}/{MAX_CHARS}</span>
-                )}
+                <AnimatePresence>
+                    {nearLimit && (
+                        <motion.span
+                            key="count"
+                            initial={{ opacity: 0, y: -4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{    opacity: 0, y: -4 }}
+                            transition={{ duration: 0.2 }}
+                            className="mr-2 font-medium text-warning-700"
+                        >
+                            {value.length}/{MAX_CHARS}
+                        </motion.span>
+                    )}
+                </AnimatePresence>
                 Answers come from your live data and are internal estimates, not certified figures. Check anything important.
             </p>
         </div>
@@ -73,9 +116,9 @@ const Composer = ({ onSend, disabled, busy, assistantName }) => {
 };
 
 Composer.propTypes = {
-    onSend: PropTypes.func.isRequired,
-    disabled: PropTypes.bool,
-    busy: PropTypes.bool,
+    onSend:        PropTypes.func.isRequired,
+    disabled:      PropTypes.bool,
+    busy:          PropTypes.bool,
     assistantName: PropTypes.string.isRequired,
 };
 

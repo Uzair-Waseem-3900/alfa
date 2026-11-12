@@ -135,3 +135,42 @@ class ToolSmokeTests(TransactionTestCase):
         self.assertIn("Uzair Waseem", out)
         self.assertIn("Sohail Iqbal", out)
         self.assertIn("Awaab Sohail", out)
+
+    # --- 3-match cap on customer_info / supplier_info -------------------------
+    def test_customer_info_gives_figures_for_three_and_names_for_the_rest(self):
+        from billing.models import Customer
+        from billing.selectors import get_customer_outstanding
+        for i in range(8):
+            Customer.objects.create(name=f"Book Depot {i}", code=f"BD-{i}", mobile=f"030{i}")
+
+        with mock.patch("billing.selectors.get_customer_outstanding", wraps=get_customer_outstanding) as per_customer:
+            data = json.loads(self._run("customer_info", {"search": "book depot"}))
+
+        self.assertEqual(per_customer.call_count, 3)                      # 1 query per detailed match, no more
+        self.assertEqual(len(data["customers"]), 3)
+        self.assertEqual(len(data["other_matches_names_only"]), 3)        # up to 6 listed in total
+        self.assertEqual(data["matches_shown"], 6)
+        self.assertTrue(data["more_matches_not_shown"])                    # 8 matched, 6 shown
+        self.assertNotIn("still_owes", data["other_matches_names_only"][0])
+        self.assertIn("still_owes", data["customers"][0])
+
+    def test_customer_info_with_few_matches_has_no_extras(self):
+        from billing.models import Customer
+        Customer.objects.create(name="Solo Traders", code="ST-1", mobile="0300")
+        data = json.loads(self._run("customer_info", {"search": "solo"}))
+        self.assertEqual((len(data["customers"]), data["other_matches_names_only"], data["more_matches_not_shown"]),
+                         (1, [], False))
+
+    def test_supplier_info_gives_figures_for_three_and_names_for_the_rest(self):
+        from purchases.models import Supplier
+        from purchases.selectors import get_supplier_payable_summary
+        for i in range(5):
+            Supplier.objects.create(name=f"Paper Mill {i}", code=f"PM-{i}")
+
+        with mock.patch("purchases.selectors.get_supplier_payable_summary", wraps=get_supplier_payable_summary) as per_supplier:
+            data = json.loads(self._run("supplier_info", {"search": "paper mill"}))
+
+        self.assertEqual(per_supplier.call_count, 3)
+        self.assertEqual((len(data["suppliers"]), len(data["other_matches_names_only"]), data["more_matches_not_shown"]),
+                         (3, 2, False))
+

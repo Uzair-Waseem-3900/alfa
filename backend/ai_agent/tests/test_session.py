@@ -58,12 +58,23 @@ class SessionTests(TestCase):
 
     async def test_history_window_keeps_tool_pairs_intact(self):
         await self.session.add_items([user_msg("old q"), asst_msg("old a"), user_msg("q"), call("t", "c"), output("c"), asst_msg("a")])
-        items = await self.session.get_items(limit=3)    # raw window = [call, output, assistant]
-        # window starts mid tool-call -> trimmed to a user boundary instead of orphaning the output
-        self.assertEqual(items, [])
-        items = await self.session.get_items(limit=4)    # [user q, call, output, assistant]
+        # raw window of 3 = [call, output, assistant]: no user message in it. It must NOT
+        # return a window that starts mid tool-call (orphaned output), and must NOT
+        # drop all memory either: it reaches back to that turn's own user message.
+        items = await self.session.get_items(limit=3)
+        self.assertEqual(items, [user_msg("q"), call("t", "c"), output("c"), asst_msg("a")])
+        items = await self.session.get_items(limit=4)    # window already starts at the user message
         self.assertEqual(items[0], user_msg("q"))
         self.assertEqual(len(items), 4)
+
+    async def test_extension_gives_up_on_absurdly_long_turns(self):
+        from ai_agent.services.session import EXTEND_FACTOR
+        long_turn = [user_msg("q")]
+        for i in range(2 * EXTEND_FACTOR + 5):
+            long_turn += [call("t", f"c{i}"), output(f"c{i}")]
+        await self.session.add_items(long_turn)
+        # window of 2 is all tool items; the turn is far longer than 2 x EXTEND_FACTOR -> give up cleanly
+        self.assertEqual(await self.session.get_items(limit=2), [])
 
     async def test_add_items_bumps_chat_updated_at(self):
         before = (await Chat.objects.aget(pk=self.chat.pk)).updated_at

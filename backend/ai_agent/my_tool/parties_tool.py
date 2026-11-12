@@ -5,22 +5,24 @@ from django.core.exceptions import ObjectDoesNotExist
 from ..schemas.context import AgentContext
 from .base import agent_tool, clamp_limit, money, to_text
 
-MAX_PARTY_MATCHES = 5   # per-party summaries cost one query each
+DETAILED_MATCHES = 3    # figures cost one query per party, so only the first few get them
+LISTED_MATCHES = 6      # further matches are listed by name/code only (no extra queries)
 
 
 @agent_tool
 def customer_info(ctx: RunContextWrapper[AgentContext], search: str) -> str:
-    """Look up customers by name, code or mobile and show what each one has been billed, paid and still owes,
-    plus credit tier. Shows up to 5 matches - if several match, list them all to the user.
+    """Look up customers by name, code or mobile. The first 3 matches include what each has been billed,
+    paid and still owes, plus credit tier; further matches (up to 6 in total) are names/codes only.
+    If several match, list them all and ask which one the user means.
 
     Args:
         search: Part of the customer's name, code or mobile number.
     """
     from billing.selectors import get_all_customers, get_customer_outstanding
 
-    matches = list(get_all_customers(search=search)[: MAX_PARTY_MATCHES + 1])
+    matches = list(get_all_customers(search=search)[: LISTED_MATCHES + 1])
     rows = []
-    for c in matches[:MAX_PARTY_MATCHES]:
+    for c in matches[:DETAILED_MATCHES]:
         o = get_customer_outstanding(c.id)
         try:
             tier, score = c.credit_score.tier, c.credit_score.score
@@ -34,9 +36,10 @@ def customer_info(ctx: RunContextWrapper[AgentContext], search: str) -> str:
             "credit_tier": tier, "credit_score": score,
         })
     return to_text({
-        "matches": len(rows),
-        "more_matches_not_shown": len(matches) > MAX_PARTY_MATCHES,
+        "matches_shown": min(len(matches), LISTED_MATCHES),
+        "more_matches_not_shown": len(matches) > LISTED_MATCHES,
         "customers": rows,
+        "other_matches_names_only": [{"name": c.name, "code": c.code} for c in matches[DETAILED_MATCHES:LISTED_MATCHES]],
     })
 
 
@@ -60,17 +63,18 @@ def customers_who_owe(ctx: RunContextWrapper[AgentContext], limit: int = 10, min
 
 @agent_tool
 def supplier_info(ctx: RunContextWrapper[AgentContext], search: str) -> str:
-    """Look up suppliers by name or code and show what we bought, paid and still owe each one.
-    Shows up to 5 matches - if several match, list them all to the user.
+    """Look up suppliers by name or code. The first 3 matches include what we bought, paid and still owe;
+    further matches (up to 6 in total) are names/codes only.
+    If several match, list them all and ask which one the user means.
 
     Args:
         search: Part of the supplier's name or code.
     """
     from purchases.selectors import get_all_suppliers, get_supplier_payable_summary
 
-    matches = list(get_all_suppliers(search=search)[: MAX_PARTY_MATCHES + 1])
+    matches = list(get_all_suppliers(search=search)[: LISTED_MATCHES + 1])
     rows = []
-    for s in matches[:MAX_PARTY_MATCHES]:
+    for s in matches[:DETAILED_MATCHES]:
         t = get_supplier_payable_summary(s.id)
         rows.append({
             "name": s.name, "code": s.code,
@@ -79,9 +83,10 @@ def supplier_info(ctx: RunContextWrapper[AgentContext], search: str) -> str:
             "we_still_owe": money(t["total_payable_outstanding"]),
         })
     return to_text({
-        "matches": len(rows),
-        "more_matches_not_shown": len(matches) > MAX_PARTY_MATCHES,
+        "matches_shown": min(len(matches), LISTED_MATCHES),
+        "more_matches_not_shown": len(matches) > LISTED_MATCHES,
         "suppliers": rows,
+        "other_matches_names_only": [{"name": s.name, "code": s.code} for s in matches[DETAILED_MATCHES:LISTED_MATCHES]],
     })
 
 

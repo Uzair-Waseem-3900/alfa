@@ -20,6 +20,7 @@ from agents.memory.session import SessionABC
 from ..models import Chat, ChatItem
 
 SKIPPED_TOOLS = frozenset({"get_guide"})
+EXTEND_FACTOR = 5   # max history = limit x this, when stretching back to a user message
 
 
 def _text_of(content) -> str:
@@ -67,7 +68,29 @@ class DjangoSession(SessionABC):
             .order_by("-id").values_list("payload", flat=True)[:limit]
         ]
         rows.reverse()
-        return trim_to_user_boundary(rows)
+        items = trim_to_user_boundary(rows)
+        if items or not rows:
+            return items
+        return await self._extend_to_last_user_message(limit)
+
+    async def _extend_to_last_user_message(self, limit: int) -> list[dict]:
+        """The newest `limit` items hold no user message (one very long,
+        tool-heavy turn). Rather than silently dropping ALL memory, reach back
+        to that turn's own user message. Bounded: a turn longer than
+        EXTEND_FACTOR x limit items is given up on (returns [])."""
+        start_id = await (
+            ChatItem.objects.filter(chat_id=self.chat_id, kind=ChatItem.Kind.USER)
+            .order_by("-id").values_list("id", flat=True).afirst()
+        )
+        if start_id is None:
+            return []
+        hard_cap = limit * EXTEND_FACTOR
+        payloads = [
+            p async for p in
+            ChatItem.objects.filter(chat_id=self.chat_id, id__gte=start_id)
+            .order_by("id").values_list("payload", flat=True)[: hard_cap + 1]
+        ]
+        return [] if len(payloads) > hard_cap else trim_to_user_boundary(payloads)
 
     async def add_items(self, items: list[dict]) -> None:
         rows = []

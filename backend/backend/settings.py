@@ -6,8 +6,8 @@ from urllib.parse import urlparse, parse_qs
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = os.getenv("SECRET_KEY")
-
-
+# uvicorn backend.asgi:application --port 8000 --reload
+# celery -A backend worker -Q agent -l info
 DEBUG = os.getenv("DEBUG").lower() == "true"
 
 def env_list(name):
@@ -254,6 +254,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # Celery
 # celery -A backend worker -l info
+# celery -A backend worker -Q agent -l info
 # import ssl
 # # Add SSL configuration for Celery
 # CELERY_BROKER_USE_SSL = {

@@ -28,12 +28,7 @@ const ThinkingDots = () => (
                 key={i}
                 className="w-2 h-2 rounded-full bg-neutral-300 motion-reduce:animate-none"
                 animate={{ y: [0, -5, 0] }}
-                transition={{
-                    duration: 0.7,
-                    repeat: Infinity,
-                    delay: i * 0.15,
-                    ease: 'easeInOut',
-                }}
+                transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.15, ease: 'easeInOut' }}
             />
         ))}
     </div>
@@ -41,31 +36,22 @@ const ThinkingDots = () => (
 
 // ─── Variants ──────────────────────────────────────────────────────────────
 
-// User bubble slides in from the right
 const userVariants = {
     hidden: { opacity: 0, x: 24, scale: 0.97 },
-    show: {
-        opacity: 1, x: 0, scale: 1,
-        transition: { type: 'spring', stiffness: 380, damping: 28 },
-    },
+    show:   { opacity: 1, x: 0,  scale: 1,
+        transition: { type: 'spring', stiffness: 380, damping: 28 } },
 };
 
-// Assistant bubble slides in from the left
 const assistantVariants = {
     hidden: { opacity: 0, x: -20, y: 8 },
-    show: {
-        opacity: 1, x: 0, y: 0,
-        transition: { type: 'spring', stiffness: 340, damping: 26 },
-    },
+    show:   { opacity: 1, x: 0,   y: 0,
+        transition: { type: 'spring', stiffness: 340, damping: 26 } },
 };
 
-// Avatar pops in independently
 const avatarVariants = {
     hidden: { opacity: 0, scale: 0.5 },
-    show: {
-        opacity: 1, scale: 1,
-        transition: { type: 'spring', stiffness: 500, damping: 22, delay: 0.04 },
-    },
+    show:   { opacity: 1, scale: 1,
+        transition: { type: 'spring', stiffness: 500, damping: 22, delay: 0.04 } },
 };
 
 // ─── MessageBubble ─────────────────────────────────────────────────────────
@@ -73,12 +59,7 @@ const avatarVariants = {
 const MessageBubble = ({ message, assistantName, onRetry }) => {
     if (message.role === 'user') {
         return (
-            <motion.div
-                className="flex justify-end"
-                variants={userVariants}
-                initial="hidden"
-                animate="show"
-            >
+            <motion.div className="flex justify-end" variants={userVariants} initial="hidden" animate="show">
                 <div className="max-w-[85%] sm:max-w-[75%] rounded-2xl rounded-br-md bg-primary-50 border border-primary-100 px-4 py-2.5 text-[15px] leading-7 text-neutral-900 whitespace-pre-wrap break-words">
                     {message.text}
                 </div>
@@ -90,13 +71,7 @@ const MessageBubble = ({ message, assistantName, onRetry }) => {
     const waiting   = streaming && !message.text && !message.steps?.length;
 
     return (
-        <motion.div
-            className="flex gap-3"
-            aria-busy={streaming}
-            variants={assistantVariants}
-            initial="hidden"
-            animate="show"
-        >
+        <motion.div className="flex gap-3" aria-busy={streaming} variants={assistantVariants} initial="hidden" animate="show">
             <motion.div variants={avatarVariants}>
                 <AssistantAvatar className="mt-0.5" />
             </motion.div>
@@ -110,7 +85,6 @@ const MessageBubble = ({ message, assistantName, onRetry }) => {
 
                 {message.text && <MarkdownContent text={message.text} />}
 
-                {/* Blinking cursor while streaming */}
                 {streaming && message.text && (
                     <motion.span
                         className="inline-block w-2 h-4 ml-0.5 align-middle bg-primary-400 rounded-sm motion-reduce:animate-none"

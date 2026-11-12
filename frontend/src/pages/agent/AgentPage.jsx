@@ -8,7 +8,7 @@ import Composer from '../../components/agent/Composer';
 import EmptyChat from '../../components/agent/EmptyChat';
 import MessageList from '../../components/agent/MessageList';
 
-const ASSISTANT_NAME = import.meta.env.VITE_ASSISTANT_NAME || 'Munshi';
+const ASSISTANT_NAME = import.meta.env.VITE_AGENT_NAME || 'Assistant';
 const COMPANY_NAME = import.meta.env.VITE_APP_NAME || 'your business';
 const MD_BREAKPOINT = 768;
 const isMobile = () => window.innerWidth < MD_BREAKPOINT;

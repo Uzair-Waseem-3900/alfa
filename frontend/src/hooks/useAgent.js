@@ -254,6 +254,14 @@ export const useChatConversation = (chatId, { onRunFinished } = {}) => {
                         patchBot((m) => ({ ...m, steps: m.steps.map((s) => (s.id === data.call_id ? { ...s, done: true } : s)) }));
                     } else if (type === 'token') {
                         pushToken(data.text);
+                    } else if (type === 'reset') {
+                        // The model's answer was cut off mid-stream and the server is
+                        // starting over: throw away the half-answer (and any tokens
+                        // still buffered for it) so the retry streams into a clean bubble.
+                        if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+                        rafRef.current = null;
+                        tokenBuffer.current = '';
+                        patchBot((m) => ({ ...m, text: '', steps: [] }));
                     } else if (type === 'done') {
                         flushNow();
                         patchBot((m) => ({ ...m, text: data.text || m.text, status: 'done' }));

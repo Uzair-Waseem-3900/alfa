@@ -15,7 +15,8 @@ from django.test import TransactionTestCase
 from django.urls import reverse
 from rest_framework_simplejwt.tokens import AccessToken
 
-from ai_agent.models import Chat, ChatRun
+from ai_agent.config.gemini_compat import IncompleteStreamError
+from ai_agent.models import Chat, ChatItem, ChatRun
 from ai_agent.services import runner, streaming
 
 from .helpers import make_admin, make_plain_user
@@ -44,6 +45,29 @@ class FakeResult:
             yield e
         if self._error:
             raise self._error
+
+
+class ScriptedResult(FakeResult):
+    """FakeResult that also writes to the chat session first, like a real run does."""
+
+    def __init__(self, events, final="", error=None, session=None, add=None):
+        super().__init__(events, final, error)
+        self._session, self._add = session, add
+
+    async def stream_events(self):
+        if self._session is not None and self._add:
+            await self._session.add_items(self._add)
+        async for e in super().stream_events():
+            yield e
+
+
+def user_item(text):
+    return {"role": "user", "content": text}
+
+
+def assistant_item(text):
+    return {"id": "m", "type": "message", "role": "assistant", "status": "completed",
+            "content": [{"type": "output_text", "text": text, "annotations": []}]}
 
 
 class SlowResult:
@@ -188,6 +212,76 @@ class ExecuteRunTests(RedisCase):
         self.assertEqual(kw["session"].session_id, str(self.chat.id))
         self.assertEqual(kw["context"].user.email, self.admin.email)
         self.assertEqual(kw["max_turns"], settings.AGENT_MAX_TURNS)
+
+
+class CutOffRetryTests(RedisCase):
+    """The model stream ended early (IncompleteStreamError): roll back, reset, retry once."""
+
+    def _run(self, run, script):
+        """`script(n, session)` returns the ScriptedResult for attempt n (0-based)."""
+        attempts = []
+
+        def run_streamed(agent, **kw):
+            attempts.append(1)
+            return script(len(attempts) - 1, kw["session"])
+
+        with mock.patch.object(runner, "build_agent"),              mock.patch.object(runner.Runner, "run_streamed", side_effect=run_streamed):
+            asyncio.run(runner.execute_run(run.id))
+        return len(attempts)
+
+    def test_cut_off_attempt_is_rolled_back_reset_and_retried(self):
+        run = self.new_run()
+
+        def script(n, session):
+            if n == 0:
+                return ScriptedResult([delta("I am NYRA ... Retrieve tax positions and asset")],
+                                      error=IncompleteStreamError("cut"), session=session,
+                                      add=[user_item("who are you and who is your developer")])
+            return ScriptedResult([delta("Full answer incl. the developer.")], final="Full answer incl. the developer.",
+                                  session=session,
+                                  add=[user_item("who are you and who is your developer"), assistant_item("Full answer incl. the developer.")])
+
+        self.assertEqual(self._run(run, script), 2)
+
+        events = self.events_of(run)
+        kinds = [k for k, _ in events]
+        self.assertEqual(kinds.count("reset"), 1)
+        self.assertEqual(kinds[-1], "done")
+        after_reset = events[kinds.index("reset") + 1:]
+        self.assertEqual("".join(d["text"] for k, d in after_reset if k == "token"), "Full answer incl. the developer.")
+        self.assertNotIn("asset", "".join(d.get("text", "") for k, d in after_reset))      # nothing stale after the reset
+        self.assertEqual(events[-1][1], {"text": "Full answer incl. the developer."})
+        self.assertEqual(dict(events)["reset"], {"reason": "cut_off"})
+
+        # history holds ONLY the successful attempt: one user message, one assistant message
+        self.assertEqual(list(ChatItem.objects.filter(chat=self.chat).order_by("id").values_list("kind", flat=True)),
+                         ["user", "assistant"])
+        run.refresh_from_db()
+        self.assertEqual(run.status, "done")
+
+    def test_cut_off_twice_ends_with_a_clear_error_not_a_silent_partial_answer(self):
+        run = self.new_run()
+        n_attempts = self._run(run, lambda n, s: ScriptedResult(
+            [delta("half an ans")], error=IncompleteStreamError("cut"), session=s, add=[user_item("q")]))
+
+        self.assertEqual(n_attempts, runner.MAX_ATTEMPTS)
+        events = self.events_of(run)
+        self.assertEqual([k for k, _ in events].count("reset"), 1)             # one retry, then give up
+        self.assertEqual(events[-1], ("error", {"message": runner.MSG_CUT_OFF}))
+        run.refresh_from_db()
+        self.assertEqual(run.status, "error")
+
+    def test_other_errors_are_not_retried(self):
+        run = self.new_run()
+        n_attempts = self._run(run, lambda n, s: FakeResult([], error=ValueError("boom")))
+        self.assertEqual(n_attempts, 1)
+        self.assertNotIn("reset", [k for k, _ in self.events_of(run)])
+
+    def test_a_clean_run_never_resets(self):
+        run = self.new_run()
+        n_attempts = self._run(run, lambda n, s: FakeResult([delta("ok")], final="ok"))
+        self.assertEqual(n_attempts, 1)
+        self.assertNotIn("reset", [k for k, _ in self.events_of(run)])
 
 
 class StreamReaderTests(RedisCase):

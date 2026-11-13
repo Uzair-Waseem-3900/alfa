@@ -94,3 +94,23 @@ class SessionTests(TestCase):
         await DjangoSession(other.id).add_items([user_msg("other chat")])
         await self.session.add_items([user_msg("mine")])
         self.assertEqual(await self.session.get_items(), [user_msg("mine")])
+
+    async def test_marker_and_rollback_remove_only_the_abandoned_attempt(self):
+        self.assertEqual(await self.session.last_item_id(), 0)               # empty chat
+        await self.session.add_items([user_msg("old q"), asst_msg("old a")])
+        marker = await self.session.last_item_id()
+        self.assertGreater(marker, 0)
+
+        # an attempt that saved its input + tool traffic, then got cut off
+        # (the get_guide call is never stored, so 3 rows were written)
+        await self.session.add_items([user_msg("new q"), call("get_guide", "g1"), call("tax_position", "t1"), output("t1")])
+        self.assertEqual(await self.session.rollback_to(marker), 3)
+        self.assertEqual(await self.session.get_items(), [user_msg("old q"), asst_msg("old a")])
+
+    async def test_rollback_also_forgets_which_call_ids_were_skipped(self):
+        marker = await self.session.last_item_id()
+        await self.session.add_items([user_msg("q"), call("get_guide", "g1")])   # g1 is now remembered as skipped
+        await self.session.rollback_to(marker)
+        # a fresh attempt may legitimately reuse that id for a normal tool: it must be stored
+        await self.session.add_items([user_msg("q"), call("tax_position", "g1"), output("g1")])
+        self.assertEqual(len(await self.session.get_items()), 3)

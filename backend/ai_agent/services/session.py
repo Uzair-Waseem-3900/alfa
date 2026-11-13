@@ -105,6 +105,20 @@ class DjangoSession(SessionABC):
         # QuerySet.update() bypasses auto_now, so bump the sort key explicitly.
         await Chat.all_objects.filter(pk=self.chat_id).aupdate(updated_at=timezone.now())
 
+    async def last_item_id(self) -> int:
+        """Id of the newest stored item (0 if none) — a marker to roll back to."""
+        last = await (
+            ChatItem.objects.filter(chat_id=self.chat_id)
+            .order_by("-id").values_list("id", flat=True).afirst()
+        )
+        return last or 0
+
+    async def rollback_to(self, item_id: int) -> int:
+        """Delete everything stored after `item_id` (an abandoned attempt's items)."""
+        deleted, _ = await ChatItem.objects.filter(chat_id=self.chat_id, id__gt=item_id).adelete()
+        self._skipped_call_ids.clear()
+        return deleted
+
     async def pop_item(self) -> dict | None:
         last = await ChatItem.objects.filter(chat_id=self.chat_id).order_by("-id").afirst()
         if last is None:

@@ -91,6 +91,7 @@ class PromptTests(SimpleTestCase):
         # Regression: "who built you / about the company" was answered with the
         # "no tool can answer" fallback because nothing said `about` covers it.
         self.assertIn('call get_guide("about")', text)
+        self.assertIn("answer every one of them, in order", text)       # multi-question messages
         self.assertIn("about (you, the company, the developer)", text)
         self.assertLess(text.index('get_guide("about")'), text.index("If no tool or guide can answer"))
         self.assertLess(len(text) // 4, 500, "base prompt must stay small (~tokens)")
@@ -178,4 +179,11 @@ class ToolSmokeTests(TransactionTestCase):
         self.assertEqual(per_supplier.call_count, 3)
         self.assertEqual((len(data["suppliers"]), len(data["other_matches_names_only"]), data["more_matches_not_shown"]),
                          (3, 2, False))
+
+
+class ResetEventTests(SimpleTestCase):
+    def test_reset_is_a_valid_non_terminal_event(self):
+        from ai_agent.schemas.events import TERMINAL_EVENTS, dump_event
+        self.assertEqual(dump_event("reset", reason="cut_off"), '{"reason":"cut_off"}')
+        self.assertNotIn("reset", TERMINAL_EVENTS)             # the stream must stay open after a reset
 

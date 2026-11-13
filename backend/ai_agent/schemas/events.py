@@ -7,6 +7,7 @@ is defined — and restricted — in exactly one place.
   token      a chunk of answer text  {"text"}
   done       run finished            {"text"}   (full final answer)
   error      run failed              {"message"}
+  reset      discard the answer so far, a retry is starting   {"reason"}
 """
 from typing import Literal
 
@@ -36,7 +37,11 @@ class ErrorEvent(BaseModel):
     message: str
 
 
-EventType = Literal["step", "step_done", "token", "done", "error"]
+class ResetEvent(BaseModel):
+    reason: str
+
+
+EventType = Literal["step", "step_done", "token", "done", "error", "reset"]
 
 _EVENT_TYPES = {
     "step": StepEvent,
@@ -44,6 +49,7 @@ _EVENT_TYPES = {
     "token": TokenEvent,
     "done": DoneEvent,
     "error": ErrorEvent,
+    "reset": ResetEvent,
 }
 
 TERMINAL_EVENTS = frozenset({"done", "error"})

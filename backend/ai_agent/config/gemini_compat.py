@@ -20,12 +20,28 @@ the Gemini client.
    wire, it is never stored in the chat session. For streams, the preamble
    chunks (role-only/empty deltas) are held back until real content arrives, so
    a retry is invisible to the SDK and the browser.
+
+3. Stream cut off mid-answer.
+   Occasionally Gemini's stream simply ends early WITHOUT its terminal chunk
+   (no finish_reason), sometimes mid-sentence; the SDK treats that as a normal
+   end and saves/shows a truncated answer. Content has already been forwarded by
+   then, so it can't be retried invisibly. Instead, once a stream that carried
+   content ends without a clean finish_reason ("stop"/"tool_calls"), raise
+   IncompleteStreamError. services.runner catches it, rolls back what the
+   attempt saved, tells the browser to clear the half-answer ("reset") and
+   runs the question once more; if that is cut off too, the user gets a clear
+   "cut off, try again" error rather than a silently truncated answer.
 """
 import logging
 
 logger = logging.getLogger(__name__)
 
 EMPTY_RETRIES = 2
+CLEAN_FINISH_REASONS = frozenset({"stop", "tool_calls", "function_call"})
+
+
+class IncompleteStreamError(Exception):
+    """A model stream ended without a clean finish_reason after sending content."""
 NUDGE = {"role": "user", "content": "Please answer the question now, using the information above."}
 
 
@@ -105,8 +121,13 @@ class _GuardedStream:
         stream = self._first
         for attempt in range(EMPTY_RETRIES + 1):
             self._current = stream
-            held, started = [], False
+            held, started, finish, chars = [], False, None, 0
             async for chunk in _IndexFixedStream(stream):
+                for choice in chunk.choices or []:
+                    if getattr(choice, "finish_reason", None):
+                        finish = choice.finish_reason
+                    if choice.delta is not None and choice.delta.content:
+                        chars += len(choice.delta.content)
                 if started:
                     yield chunk
                     continue
@@ -117,7 +138,11 @@ class _GuardedStream:
                         yield h
                     held = []
             if started:
-                return
+                if finish in CLEAN_FINISH_REASONS:
+                    logger.info("Gemini turn finished: finish_reason=%s chars=%d", finish, chars)
+                    return
+                logger.warning("Gemini stream ended without a clean finish: finish_reason=%r chars=%d", finish, chars)
+                raise IncompleteStreamError(f"stream ended with finish_reason={finish!r} after {chars} characters")
             if attempt == EMPTY_RETRIES:               # give up: let the SDK see the empty completion
                 for h in held:
                     yield h

@@ -53,6 +53,10 @@ class RunPublisher:
         if time.monotonic() - self._last_flush >= TOKEN_FLUSH_SECONDS:
             await self.flush_tokens()
 
+    def discard_tokens(self) -> None:
+        """Drop buffered-but-unsent tokens (the attempt they belong to is being abandoned)."""
+        self._buffer = []
+
     async def flush_tokens(self) -> None:
         if self._buffer:
             text, self._buffer = "".join(self._buffer), []

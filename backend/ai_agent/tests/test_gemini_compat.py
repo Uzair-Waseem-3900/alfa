@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from django.test import SimpleTestCase
 
 from ai_agent.config.gemini_compat import (
-    EMPTY_RETRIES, NUDGE, _GuardedStream, _IndexFixedStream, patch_gemini_client,
+    EMPTY_RETRIES, NUDGE, IncompleteStreamError, _GuardedStream, _IndexFixedStream, patch_gemini_client,
 )
 
 
@@ -143,3 +143,46 @@ class EmptyCompletionRetryTests(SimpleTestCase):
         client, _ = make_client([response(content="x"), aiter([chunk(content="x")])])
         self.assertNotIsInstance(asyncio.run(client.chat.completions.create(messages=[])), _GuardedStream)
         self.assertIsInstance(asyncio.run(client.chat.completions.create(messages=[], stream=True)), _GuardedStream)
+
+
+class CutOffStreamTests(SimpleTestCase):
+    """A stream that carried content but ended without a clean finish_reason was cut off."""
+
+    def _consume(self, chunks):
+        client, _ = make_client([aiter(chunks)])
+        stream = asyncio.run(client.chat.completions.create(messages=list(MESSAGES), stream=True))
+        received = []
+
+        async def go():
+            async for c in stream:
+                received.append(c)
+
+        return received, go
+
+    def test_content_without_finish_reason_raises_after_forwarding_the_partial_text(self):
+        # exactly the field failure: "...I cannot create, edit" and then nothing
+        received, go = self._consume([chunk(), chunk(content="I cannot create, edit")])
+        with self.assertLogs("ai_agent.config.gemini_compat", level="WARNING"):
+            with self.assertRaises(IncompleteStreamError):
+                asyncio.run(go())
+        self.assertEqual(len(received), 2)              # the partial text WAS forwarded (live streaming)
+
+    def test_truncating_finish_reasons_also_raise(self):
+        for reason in ("length", "content_filter"):
+            received, go = self._consume([chunk(content="half an ans", finish=reason)])
+            with self.assertLogs("ai_agent.config.gemini_compat", level="WARNING"):
+                with self.assertRaises(IncompleteStreamError, msg=reason):
+                    asyncio.run(go())
+
+    def test_clean_finish_reasons_pass(self):
+        for reason in ("stop", "tool_calls"):
+            received, go = self._consume([chunk(content="whole answer", finish=reason)])
+            asyncio.run(go())
+            self.assertEqual(len(received), 1, reason)
+
+    def test_tool_call_turn_cut_off_without_finish_also_raises(self):
+        received, go = self._consume([chunk(call("function-call-A", args="{}"))])
+        with self.assertLogs("ai_agent.config.gemini_compat", level="WARNING"):
+            with self.assertRaises(IncompleteStreamError):
+                asyncio.run(go())
+

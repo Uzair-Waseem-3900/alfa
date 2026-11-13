@@ -12,6 +12,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import close_old_connections
 
+from ..config.gemini_compat import IncompleteStreamError
 from ..models import ChatRun
 from ..my_agents.main_agent import build_agent
 from ..my_tool import step_label
@@ -22,20 +23,56 @@ from .streaming import RunPublisher
 
 logger = logging.getLogger(__name__)
 
+# A model stream that ends early (no finish signal) is retried once from scratch.
+MAX_ATTEMPTS = 2
+
 MSG_BUSY = "The AI service is busy right now. Please try again in a minute."
 MSG_TURNS = "I couldn't finish that within my step limit. Try asking a narrower question."
 MSG_TIMEOUT = "That took too long, so I stopped. Try a narrower question."
+MSG_CUT_OFF = "The answer was cut off before it finished. Please try again."
 MSG_FAILED = "Something went wrong while answering. Please try again."
 
 
 def _friendly_error(exc: Exception) -> str:
     if isinstance(exc, MaxTurnsExceeded):
         return MSG_TURNS
+    if isinstance(exc, IncompleteStreamError):
+        return MSG_CUT_OFF
     if isinstance(exc, TimeoutError):
         return MSG_TIMEOUT
     if isinstance(exc, openai.RateLimitError):
         return MSG_BUSY
     return MSG_FAILED
+
+
+async def _attempt(run, user, session, publisher) -> str:
+    """One complete agent run: publishes step/token events, returns the final answer."""
+    result = Runner.run_streamed(
+        build_agent(),
+        input=run.user_message,
+        session=session,
+        context=AgentContext(user=user),
+        max_turns=settings.AGENT_MAX_TURNS,
+    )
+
+    tool_names: dict[str, str] = {}   # call_id -> tool name
+    async for event in result.stream_events():
+        if event.type == "raw_response_event":
+            if getattr(event.data, "type", "") == "response.output_text.delta":
+                await publisher.token(event.data.delta)
+        elif event.type == "run_item_stream_event":
+            if event.name == "tool_called":
+                raw = event.item.raw_item
+                name, call_id = getattr(raw, "name", ""), getattr(raw, "call_id", "")
+                tool_names[call_id] = name
+                await publisher.publish("step", call_id=call_id, name=name, label=step_label(name))
+            elif event.name == "tool_output":
+                raw = event.item.raw_item
+                call_id = raw.get("call_id", "") if isinstance(raw, dict) else getattr(raw, "call_id", "")
+                await publisher.publish("step_done", call_id=call_id, name=tool_names.get(call_id, ""))
+
+    await publisher.flush_tokens()
+    return str(result.final_output or "")
 
 
 async def execute_run(run_id) -> None:
@@ -55,40 +92,34 @@ async def execute_run(run_id) -> None:
         if not (user.is_active and user.is_staff):
             raise PermissionError("user is no longer allowed to use the assistant")
 
-        result = Runner.run_streamed(
-            build_agent(),
-            input=run.user_message,
-            session=DjangoSession(run.chat_id),
-            context=AgentContext(user=user),
-            max_turns=settings.AGENT_MAX_TURNS,
-        )
+        session = DjangoSession(run.chat_id)
+        marker = await session.last_item_id()   # where to roll back to if an attempt is cut off
 
-        tool_names: dict[str, str] = {}   # call_id -> tool name
-        # Hard ceiling so a stuck model/tool can never wedge a chat (the solo
-        # pool does not enforce CELERY_TASK_TIME_LIMIT).
+        # Hard ceiling over ALL attempts, so a stuck model/tool can never wedge a
+        # chat (the solo pool does not enforce CELERY_TASK_TIME_LIMIT).
         async with asyncio.timeout(settings.AGENT_RUN_TIMEOUT_SECONDS):
-            async for event in result.stream_events():
-                if event.type == "raw_response_event":
-                    if getattr(event.data, "type", "") == "response.output_text.delta":
-                        await publisher.token(event.data.delta)
-                elif event.type == "run_item_stream_event":
-                    if event.name == "tool_called":
-                        raw = event.item.raw_item
-                        name, call_id = getattr(raw, "name", ""), getattr(raw, "call_id", "")
-                        tool_names[call_id] = name
-                        await publisher.publish("step", call_id=call_id, name=name, label=step_label(name))
-                    elif event.name == "tool_output":
-                        raw = event.item.raw_item
-                        call_id = raw.get("call_id", "") if isinstance(raw, dict) else getattr(raw, "call_id", "")
-                        await publisher.publish("step_done", call_id=call_id, name=tool_names.get(call_id, ""))
+            for attempt in range(1, MAX_ATTEMPTS + 1):
+                try:
+                    final_text = await _attempt(run, user, session, publisher)
+                    break
+                except IncompleteStreamError:
+                    if attempt == MAX_ATTEMPTS:
+                        raise
+                    logger.warning("agent run %s: model stream was cut off (attempt %d/%d); retrying",
+                                   run_id, attempt, MAX_ATTEMPTS)
+                    # Abandon the partial attempt: forget what it saved, clear what the
+                    # browser has shown of it, and start over on a clean slate.
+                    publisher.discard_tokens()
+                    await session.rollback_to(marker)
+                    await publisher.publish("reset", reason="cut_off")
 
-        await publisher.flush_tokens()
-        await publisher.publish("done", text=str(result.final_output or ""))
+        await publisher.publish("done", text=final_text)
         await sync_to_async(run_service.mark_done)(run_id)
 
     except Exception as exc:  # noqa: BLE001 - last line of defence: the run must always end
         body = getattr(exc, "body", None)   # openai.APIStatusError carries the provider's reason
-        if not isinstance(exc, (AgentsException, openai.OpenAIError, PermissionError, TimeoutError)):
+        expected = (AgentsException, openai.OpenAIError, PermissionError, TimeoutError, IncompleteStreamError)
+        if not isinstance(exc, expected):
             logger.exception("agent run %s crashed", run_id)
         else:
             logger.warning("agent run %s failed: %r %s", run_id, exc, f"body={body}" if body else "")

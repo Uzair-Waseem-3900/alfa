@@ -12,6 +12,7 @@ from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import close_old_connections
 
+from ..config.configs import client_scope
 from ..config.gemini_compat import IncompleteStreamError
 from ..models import ChatRun
 from ..my_agents.main_agent import build_agent
@@ -97,7 +98,7 @@ async def execute_run(run_id) -> None:
 
         # Hard ceiling over ALL attempts, so a stuck model/tool can never wedge a
         # chat (the solo pool does not enforce CELERY_TASK_TIME_LIMIT).
-        async with asyncio.timeout(settings.AGENT_RUN_TIMEOUT_SECONDS):
+        async with client_scope(), asyncio.timeout(settings.AGENT_RUN_TIMEOUT_SECONDS):
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 try:
                     final_text = await _attempt(run, user, session, publisher)

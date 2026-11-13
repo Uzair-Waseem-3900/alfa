@@ -186,3 +186,38 @@ class CutOffStreamTests(SimpleTestCase):
             with self.assertRaises(IncompleteStreamError):
                 asyncio.run(go())
 
+
+class ClientScopeTests(SimpleTestCase):
+    """Model clients must be closed before the run's event loop ends (no 'Event loop is closed' noise)."""
+
+    def test_clients_built_inside_the_scope_are_closed_on_exit_even_after_an_error(self):
+        from unittest import mock
+        from ai_agent.config.configs import build_model, client_scope
+
+        closed = []
+
+        async def go():
+            with self.settings(GEMINI_API_KEY="test-key"):
+                try:
+                    async with client_scope():
+                        model = build_model()
+                        original_close = model._client.close
+
+                        async def spy_close():
+                            closed.append(model._client)
+                            await original_close()
+
+                        model._client.close = spy_close
+                        raise RuntimeError("the run failed")
+                except RuntimeError:
+                    pass
+
+        asyncio.run(go())
+        self.assertEqual(len(closed), 1)
+
+    def test_building_a_model_outside_a_scope_registers_nothing(self):
+        from ai_agent.config import configs
+        with self.settings(GEMINI_API_KEY="test-key"):
+            configs.build_model()
+        self.assertIsNone(configs._scope_clients.get())
+

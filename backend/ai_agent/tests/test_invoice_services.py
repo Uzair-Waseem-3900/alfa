@@ -39,7 +39,7 @@ class WorldTestCase(InvoiceWorld, TestCase):
 
     def update(self, bill, *, run=None, **kw):
         args = dict(bill_number=bill, set_lines=None, remove_product_ids=None, invoice_discount=None,
-                    invoice_discount_type="percent", due_date=None)
+                    invoice_discount_type="percent", due_date=None, clear_invoice_discount=False)
         args.update(kw)
         return invoicing.update_draft(**self.ctx_kwargs(run), **args)
 
@@ -112,7 +112,7 @@ class CreateDraftTests(WorldTestCase):
 
     def test_line_models_reject_impossible_input(self):
         for bad in (dict(discount_percent=5, discount_amount=5), dict(discount_percent=-1), dict(discount_percent=101),
-                    dict(discount_amount=-5), dict(gst=-1), dict(gst=101), dict(wht=101), dict(quantity=0)):
+                    dict(discount_amount=-5), dict(gst=-1), dict(gst=101), dict(wht=101), dict(quantity=-1)):
             with self.assertRaises(PydanticValidationError, msg=str(bad)):
                 InvoiceLineIn(product_id=1, **{"quantity": 1, **bad})
         with override_settings(AGENT_INVOICE_MAX_QTY=10):

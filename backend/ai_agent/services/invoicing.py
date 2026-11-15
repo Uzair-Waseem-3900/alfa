@@ -131,6 +131,10 @@ def _line_discount(line: InvoiceLineIn, rate: Decimal, product, *, keep: Decimal
     return discount
 
 
+def _resets(line: InvoiceLineIn, what: str) -> bool:
+    return bool(line.reset) and what in line.reset
+
+
 def _pct(value: float | None, keep: Decimal | None) -> Decimal:
     """GST/WHT percent, rounded to the 2 decimals billing stores (never silently by the database)."""
     if value is not None:
@@ -351,10 +355,12 @@ def create_draft(
 def update_draft(
     *, user, run_id, chat_id, bill_number: str, set_lines: list[InvoiceLineIn] | None,
     remove_product_ids: list[int] | None, invoice_discount: float | None,
-    invoice_discount_type: InvoiceDiscountType, due_date: str | None,
+    invoice_discount_type: InvoiceDiscountType, due_date: str | None, clear_invoice_discount: bool = False,
 ) -> dict:
     require_write_access(user=user, run_id=run_id)
     set_lines, remove_product_ids = set_lines or [], remove_product_ids or []
+    if clear_invoice_discount:
+        invoice_discount = 0.0           # explicit "remove the invoice discount"; a bare 0 elsewhere means "not given"
     if not (set_lines or remove_product_ids or invoice_discount is not None or due_date):
         raise ToolInputError("Nothing to change. Say what to change: a product line, the invoice discount or the due date.")
     _check_line_count(len(set_lines))              # bounded BEFORE any lookup work
@@ -365,7 +371,7 @@ def update_draft(
     payload = {
         "bill_number": bill_number.strip(), "set_lines": [ln.model_dump() for ln in set_lines],
         "remove_product_ids": sorted(remove_product_ids), "invoice_discount": invoice_discount,
-        "invoice_discount_type": invoice_discount_type, "due_date": due_date,
+        "invoice_discount_type": invoice_discount_type, "due_date": due_date, "clear": bool(clear_invoice_discount),
     }
     args_hash = _args_hash(UPDATE, payload)
     earlier = _repeat_of(run_id, UPDATE, args_hash)
@@ -402,9 +408,10 @@ def update_draft(
             raise ToolInputError(f"'{product.name}' is a new line, so it needs a quantity.")
         current[ln.product_id] = {
             "quantity": ln.quantity if ln.quantity is not None else existing["quantity"],
-            "discount": _line_discount(ln, rate, product, keep=existing["discount"] if existing else None),
-            "gst": _pct(ln.gst, existing["gst"] if existing else None),
-            "wht": _pct(ln.wht, existing["wht"] if existing else None),
+            # `reset` is the ONLY way to clear a value: zeros/nulls from the model mean "not given".
+            "discount": _line_discount(ln, rate, product, keep=None if _resets(ln, "discount") else (existing["discount"] if existing else None)),
+            "gst": _pct(ln.gst, None if _resets(ln, "gst") else (existing["gst"] if existing else None)),
+            "wht": _pct(ln.wht, None if _resets(ln, "wht") else (existing["wht"] if existing else None)),
         }
     if not current:
         raise ToolInputError("That would remove every line. To cancel the invoice, discard the draft instead.")

@@ -19,6 +19,8 @@ import time
 from decimal import Decimal
 
 from agents import function_tool
+from agents.function_schema import function_schema
+from pydantic import ValidationError
 from django.conf import settings
 from django.db import connections
 
@@ -56,11 +58,27 @@ def to_text(payload) -> str:
     return text
 
 
-def _refuse_unknown_arguments(tool) -> None:
-    """The SDK silently drops arguments a tool does not declare. For tools that CHANGE data that is
-    dangerous (the model could think it set an advance/price/status): answer with an error instead."""
-    original = tool.on_invoke_tool
+def _tool_error(ctx, error) -> str:
+    """Fallback when the SDK itself rejects the call (e.g. the arguments were not even valid JSON).
+    Field-level problems are caught earlier, with names, by `_guard_arguments` below."""
+    return f"Cannot do that: the arguments were not valid ({str(error)[:200]}). Nothing was changed. Fix the arguments and try again."
+
+
+def _field_problems(error: ValidationError) -> str:
+    """'lines.0.quantity: Input should be greater than or equal to 1; customer_id: Field required' —
+    names and rules only, never the values the model sent."""
+    return "; ".join(f"{'.'.join(str(part) for part in e['loc'])}: {e['msg']}" for e in error.errors()[:5])
+
+
+def _guard_arguments(tool, wrapper, *, write: bool) -> None:
+    """Pre-validate the call with the SAME pydantic model the SDK would use, so the model is told WHICH
+    field is wrong. (By default the SDK redacts validation details for privacy, leaving only
+    "Invalid JSON input for tool X": the model can't fix its call, retries blindly, and — seen live —
+    may then claim success.) For tools that change data it also refuses undeclared arguments instead of
+    letting the SDK silently drop them (the model could believe it set an advance/price/status)."""
+    schema = function_schema(wrapper, strict_json_schema=tool.strict_json_schema)
     allowed = set(tool.params_json_schema.get("properties", {}))
+    original = tool.on_invoke_tool
 
     async def guarded(ctx, input_json):
         try:
@@ -69,17 +87,26 @@ def _refuse_unknown_arguments(tool) -> None:
             data = None
         if isinstance(data, dict):
             unknown = sorted(set(data) - allowed)
-            if unknown:
+            if write and unknown:
                 return (
                     f"Cannot do that: unknown argument(s) {', '.join(unknown)}. Nothing was changed. "
                     "Payments, advances, prices, shelves and status cannot be set by this tool."
                 )
+            try:
+                schema.params_pydantic_model(**data)
+            except ValidationError as exc:
+                return (f"Cannot do that: the arguments were not valid ({_field_problems(exc)}). "
+                        "Nothing was changed. Fix the arguments and try again.")
         return await original(ctx, input_json)
 
     tool.on_invoke_tool = guarded
 
 
-def agent_tool(func=None, *, strict_args=False, **tool_kwargs):
+def agent_tool(func=None, *, write=False, **tool_kwargs):
+    """`write=True` marks a tool that CHANGES data: undeclared arguments are refused (not silently
+    dropped) and an internal failure says plainly that the change was NOT made."""
+    tool_kwargs.setdefault("failure_error_function", _tool_error)
+
     def decorate(f):
         @functools.wraps(f)
         def wrapper(ctx, *args, **kwargs):
@@ -91,6 +118,9 @@ def agent_tool(func=None, *, strict_args=False, **tool_kwargs):
                 return f"Cannot do that: {exc}"
             except Exception:
                 logger.exception("agent tool %s failed", f.__name__)
+                if write:
+                    return ("The change was NOT made because of an internal error. Tell the user it failed and to try "
+                            "again later. Never say it was created, changed or discarded.")
                 return "The tool failed to read the data. Tell the user something went wrong and to try again."
             finally:
                 connections.close_all()   # dedicated to_thread worker thread: don't leave its connection open
@@ -99,8 +129,7 @@ def agent_tool(func=None, *, strict_args=False, **tool_kwargs):
                 logger.log(level, "agent tool %s took %.0f ms", f.__name__, elapsed * 1000)
 
         tool = function_tool(wrapper, **tool_kwargs)
-        if strict_args:
-            _refuse_unknown_arguments(tool)
+        _guard_arguments(tool, wrapper, write=write)
         return tool
 
     return decorate(func) if func is not None else decorate

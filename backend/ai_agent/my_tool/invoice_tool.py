@@ -89,7 +89,7 @@ def find_product_for_invoice(
     })
 
 
-@agent_tool(strict_args=True)
+@agent_tool(write=True)
 def create_draft_invoice(
     ctx: RunContextWrapper[AgentContext],
     customer_id: int,
@@ -106,6 +106,7 @@ def create_draft_invoice(
     unless a product is named: use discount_percent (of that product's rate) or discount_amount
     (Rs off per unit). Use invoice_discount only if the user says "invoice discount" or "whole
     invoice" (percent unless they say flat/Rs). Advance payments are not possible here.
+    Leave out (null) every field the user did not give; never send 0 for "not given".
     Show summary_markdown to the user exactly as returned.
 
     Args:
@@ -116,6 +117,7 @@ def create_draft_invoice(
         due_date: YYYY-MM-DD, only if the user gave one.
     """
     user = ctx.context.user
+    invoice_discount = invoice_discount or None      # the model sends 0 for "not given"
     result = invoicing.create_draft(
         user=user, run_id=ctx.context.run_id, chat_id=ctx.context.chat_id, customer_id=customer_id, lines=lines,
         invoice_discount=invoice_discount, invoice_discount_type=invoice_discount_type, due_date=due_date,
@@ -123,7 +125,7 @@ def create_draft_invoice(
     return to_text(result)
 
 
-@agent_tool(strict_args=True)
+@agent_tool(write=True)
 def update_draft_invoice(
     ctx: RunContextWrapper[AgentContext],
     bill_number: str,
@@ -132,11 +134,13 @@ def update_draft_invoice(
     invoice_discount: float | None = None,
     invoice_discount_type: InvoiceDiscountType = "percent",
     due_date: str | None = None,
+    clear_invoice_discount: bool = False,
 ) -> str:
     """Change an existing DRAFT invoice (any draft the user names by bill number). Only send what changes:
     set_lines adds a product or changes the fields you give for one already on the invoice (others keep
-    their values); remove_product_ids removes lines. Confirmed invoices can't be edited. Discount rules
-    are the same as create_draft_invoice. Payments/advances are never touched.
+    their values); remove_product_ids removes lines. To REMOVE a discount/GST/WHT from a line use that
+    line's reset (e.g. ["gst"]); 0 or null means "not given". Confirmed invoices can't be edited. Discount
+    rules are the same as create_draft_invoice. Payments/advances are never touched.
     Show summary_markdown to the user exactly as returned.
 
     Args:
@@ -146,16 +150,18 @@ def update_draft_invoice(
         invoice_discount: New whole-invoice discount value, only if asked for.
         invoice_discount_type: "percent" (default) or "flat".
         due_date: New due date, YYYY-MM-DD.
+        clear_invoice_discount: true ONLY if the user asks to remove the whole-invoice discount.
     """
+    invoice_discount = invoice_discount or None      # the model sends 0 for "not given"
     result = invoicing.update_draft(
         user=ctx.context.user, run_id=ctx.context.run_id, chat_id=ctx.context.chat_id, bill_number=bill_number,
         set_lines=set_lines, remove_product_ids=remove_product_ids, invoice_discount=invoice_discount,
-        invoice_discount_type=invoice_discount_type, due_date=due_date,
+        invoice_discount_type=invoice_discount_type, due_date=due_date, clear_invoice_discount=clear_invoice_discount,
     )
     return to_text(result)
 
 
-@agent_tool(strict_args=True)
+@agent_tool(write=True)
 def discard_draft_invoice(ctx: RunContextWrapper[AgentContext], bill_number: str) -> str:
     """Discard (delete) a DRAFT invoice the user asks to cancel; this frees the stock it reserved.
     Only drafts without an advance payment; anything else must be done in the Billing page.

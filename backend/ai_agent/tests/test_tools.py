@@ -90,6 +90,7 @@ class PromptTests(SimpleTestCase):
         self.assertTrue(all(t in text for t in TOPICS))
         self.assertIn("DRAFT invoices", text)                            # the only write scope
         self.assertIn('get_guide("invoices")', text)
+        self.assertIn("unless the tool result confirms it", text)         # never claim a write that did not happen
         # Regression: "who built you / about the company" was answered with the
         # "no tool can answer" fallback because nothing said `about` covers it.
         self.assertIn('call get_guide("about")', text)

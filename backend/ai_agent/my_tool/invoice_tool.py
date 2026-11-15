@@ -104,7 +104,8 @@ def create_draft_invoice(
     Do NOT ask about discount, GST, WHT or due date: pass only what the user said; the rest
     use defaults (0, 0, 0, due in 7 days). A plain "discount" is a LINE discount on every line
     unless a product is named: use discount_percent (of that product's rate) or discount_amount
-    (Rs off per unit). Use invoice_discount only if the user says "invoice discount" or "whole
+    (Rs off per unit); a NEGATIVE value is a SURCHARGE (price increase), e.g. "-2" -> discount_amount -2.
+    Never change a number or its sign from what the user said. Use invoice_discount only if the user says "invoice discount" or "whole
     invoice" (percent unless they say flat/Rs). Advance payments are not possible here.
     Leave out (null) every field the user did not give; never send 0 for "not given".
     Show summary_markdown to the user exactly as returned.

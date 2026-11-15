@@ -111,8 +111,8 @@ class CreateDraftTests(WorldTestCase):
         self.assertIn("Grand total: Rs 900.00", result["summary_markdown"])
 
     def test_line_models_reject_impossible_input(self):
-        for bad in (dict(discount_percent=5, discount_amount=5), dict(discount_percent=-1), dict(discount_percent=101),
-                    dict(discount_amount=-5), dict(gst=-1), dict(gst=101), dict(wht=101), dict(quantity=-1)):
+        for bad in (dict(discount_percent=5, discount_amount=5), dict(discount_percent=-101), dict(discount_percent=101),
+                    dict(gst=-1), dict(gst=101), dict(wht=101), dict(quantity=-1)):
             with self.assertRaises(PydanticValidationError, msg=str(bad)):
                 InvoiceLineIn(product_id=1, **{"quantity": 1, **bad})
         with override_settings(AGENT_INVOICE_MAX_QTY=10):

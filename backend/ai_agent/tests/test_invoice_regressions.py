@@ -129,8 +129,73 @@ class FailedWritesAreNeverReportedAsSuccessTests(InvoiceWorld, TransactionTestCa
         self.assertNotIn("no such table", out)                                   # internals never reach the model
         self.assertEqual(AgentAction.objects.count(), 0)
 
+    def test_a_negative_discount_goes_through_the_sdk_path_with_its_sign(self):
+        out = json.loads(self.call("create_draft_invoice", {
+            "customer_id": self.customer.id, "invoice_discount": 3, "invoice_discount_type": "percent",
+            "lines": [{"product_id": self.pen.id, "quantity": 10, "discount_amount": -2, "discount_percent": None,
+                       "gst": None, "wht": None, "reset": []}],
+        }))
+        self.assertEqual(out["result"], "draft_created")
+        self.assertEqual(Invoice.objects.get(pk=out["invoice_id"]).items.get().discount, Decimal("-2"))
+        self.assertIn("surcharge", out["summary_markdown"])
+
     def test_read_tools_keep_their_own_failure_text(self):
         with mock.patch("ai_agent.selectors.invoicing.find_customers", side_effect=RuntimeError("boom")):
             out = self.call("find_customer_for_invoice", {"search": "x"})
         self.assertIn("failed to read the data", out)
         self.assertNotIn("NOT made", out)
+
+
+class SurchargeTests(WorldTestCase):
+    """A NEGATIVE line discount is a surcharge. A real chat asked for -2 and the assistant silently
+    created +2 (a discount) because the schema said "positive only"."""
+
+    def test_the_users_exact_request_a_surcharge_a_discount_and_a_whole_invoice_discount(self):
+        # "max blue 10 with line discount -2, max red 5 with line discount 3, whole invoice discount 3 percent"
+        blue = InvoiceLineIn(product_id=self.pen.id, quantity=10, discount_amount=-2)
+        red = InvoiceLineIn(product_id=self.book.id, quantity=5, discount_amount=3)
+        result = self.create([blue, red], invoice_discount=3, invoice_discount_type="percent")
+
+        items = {i.product_id: i for i in self.invoice_of(result).items.all()}
+        self.assertEqual(items[self.pen.id].discount, Decimal("-2"))              # sign preserved: a SURCHARGE
+        self.assertEqual(items[self.book.id].discount, Decimal("3"))
+        # pen: 10 x (100 + 2) = 1020 ; book: 5 x (200 - 3) = 985 ; 2005 less 3% (60.15) = 1944.85
+        md = result["summary_markdown"]
+        self.assertIn("Grand total: Rs 1,944.85", md)
+        self.assertIn("surcharge of Rs 2.00 per unit", md)                        # the user is told it is a surcharge
+        self.assertIn("Invoice discount:", md)
+        inv = self.invoice_of(result)
+        self.assertEqual((inv.invoice_discount_type, inv.invoice_discount_value), ("percent", Decimal("3")))
+
+    def test_the_payload_shape_gemini_really_sent_keeps_the_negative_sign(self):
+        line = InvoiceLineIn(**{"gst": None, "reset": [], "discount_percent": None, "discount_amount": -2,
+                                "product_id": self.pen.id, "wht": None, "quantity": 10})
+        self.assertEqual(line.discount_amount, -2)
+        item = self.invoice_of(self.create([line])).items.get()
+        self.assertEqual(item.discount, Decimal("-2"))
+
+    def test_negative_percent_is_a_percentage_surcharge_of_the_current_rate(self):
+        item = self.invoice_of(self.create([InvoiceLineIn(product_id=self.pen.id, quantity=1, discount_percent=-5)])).items.get()
+        self.assertEqual(item.discount, Decimal("-5.0000"))                       # 5% of Rs 100, as a surcharge
+
+    def test_a_surcharge_larger_than_the_price_is_refused_in_plain_words(self):
+        from ai_agent.exceptions import ToolInputError
+        with self.assertRaises(ToolInputError) as cm:
+            self.create([InvoiceLineIn(product_id=self.pen.id, quantity=1, discount_amount=-150)])
+        self.assertIn("surcharge", str(cm.exception))
+        self.assertEqual(Invoice.objects.count(), 0)
+        with self.assertRaises(Exception):
+            InvoiceLineIn(product_id=self.pen.id, quantity=1, discount_percent=-101)
+
+    def test_a_surcharge_can_be_set_on_an_existing_line_and_other_values_stay(self):
+        made = self.create([InvoiceLineIn(product_id=self.pen.id, quantity=4, gst=18)])
+        self.update(made["bill_number"], set_lines=[InvoiceLineIn(product_id=self.pen.id, discount_amount=-3)], run=self.new_run())
+        item = self.invoice_of(made).items.get()
+        self.assertEqual((item.discount, item.gst, item.quantity), (Decimal("-3"), Decimal("18"), 4))
+
+    def update(self, bill, *, run=None, **kw):
+        args = dict(bill_number=bill, set_lines=None, remove_product_ids=None, invoice_discount=None,
+                    invoice_discount_type="percent", due_date=None, clear_invoice_discount=False)
+        args.update(kw)
+        return invoicing.update_draft(**self.ctx_kwargs(run), **args)
+

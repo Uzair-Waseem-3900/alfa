@@ -24,10 +24,11 @@ class InvoiceLineIn(BaseModel):
 
     product_id: int
     quantity: int | None = Field(default=None, ge=1)
-    # Line discount, EITHER as a percent of the product's current rate OR as rupees
-    # off per unit. Positive only (the assistant never adds surcharges).
-    discount_percent: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
-    discount_amount: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    # Line discount, EITHER as a percent of the product's current rate OR as rupees off per unit.
+    # NEGATIVE = SURCHARGE (price increase); billing stores it that way. The service keeps it within
+    # +/- the product's rate. The sign is never changed: -2 means a Rs 2 surcharge per unit.
+    discount_percent: float | None = Field(default=None, ge=-100, le=100, allow_inf_nan=False)
+    discount_amount: float | None = Field(default=None, allow_inf_nan=False)
     gst: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)     # percent
     wht: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)     # percent
     reset: list[ResettableField] | None = None                                    # explicit "remove this" on an existing line

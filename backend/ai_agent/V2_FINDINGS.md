@@ -29,7 +29,7 @@ Status legend: **OPEN** (not done) · **PARTIAL** (mitigated, full fix open) · 
 - **Tests to add:** a bill number that appears only inside a customer name is refused; typed by the user is allowed; created earlier in the chat is allowed.
 
 ### A4. No cap on discounts or due dates — PARTIAL
-- **Where:** `_line_discount` allows 0–100% (a line may be free); `_due_date` has no upper bound; gst/wht allow up to 100.
+- **Where:** `_line_discount` allows any value from a surcharge of the full price to a 100% discount (a line may be free or double-priced; surcharges are allowed by owner decision); `_due_date` has no upper bound; gst/wht allow up to 100.
 - **Done in v1:** a free line gets a heads-up in the summary.
 - **v2 fix:** settings such as `AGENT_MAX_LINE_DISCOUNT_PERCENT` (owner picks, e.g. 50) and `AGENT_MAX_DUE_DAYS` (e.g. 365), enforced in `_line_discount` / `_due_date` with plain-language refusals; consider a business-chosen cap for GST/WHT too. These are assistant-side rules only (billing's own "invoice discount ≤ profit" check stays).
 - **Tests to add:** over-cap discount and far-future due date refused, at-cap allowed.

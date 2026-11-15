@@ -128,6 +128,10 @@ def _line_discount(line: InvoiceLineIn, rate: Decimal, product, *, keep: Decimal
         raise ToolInputError(
             f"The discount on '{product.name}' (Rs {discount:,.2f} per unit) is more than its price (Rs {rate:,.2f})."
         )
+    if discount < -rate:     # a surcharge may at most double the price
+        raise ToolInputError(
+            f"The surcharge on '{product.name}' (Rs {-discount:,.2f} per unit) is more than its price (Rs {rate:,.2f})."
+        )
     return discount
 
 
@@ -211,6 +215,11 @@ def build_summary(invoice, *, defaults: list[str], notes: list[str] | None = Non
             f"| {_md(item.product.name)} ({_md(item.product.code)}) | {item.quantity} | {rate} | "
             f"{_num(item.discount)} | {_num(item.gst)} | {_num(item.wht)} | {_money(computed['line_total'])} |"
         )
+        if item.discount < 0:
+            notes.append(
+                f"the line for {_md(item.product.name)} has a surcharge of Rs {-item.discount:,.2f} per unit "
+                "(a negative discount), so it is priced above the rate list"
+            )
         if computed["effective_price"] is not None and computed["effective_price"] == 0:
             notes.append(f"the line for {_md(item.product.name)} is free (its discount equals its price)")
 

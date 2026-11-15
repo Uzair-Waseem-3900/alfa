@@ -16,7 +16,7 @@ from django.urls import reverse
 from rest_framework_simplejwt.tokens import AccessToken
 
 from ai_agent.config.gemini_compat import IncompleteStreamError
-from ai_agent.models import Chat, ChatItem, ChatRun
+from ai_agent.models import AgentAction, Chat, ChatItem, ChatRun
 from ai_agent.services import runner, streaming
 
 from .helpers import make_admin, make_plain_user
@@ -211,6 +211,7 @@ class ExecuteRunTests(RedisCase):
         self.assertEqual(kw["input"], "how much cash?")
         self.assertEqual(kw["session"].session_id, str(self.chat.id))
         self.assertEqual(kw["context"].user.email, self.admin.email)
+        self.assertEqual((kw["context"].run_id, kw["context"].chat_id), (str(run.id), str(self.chat.id)))   # write audit/idempotency key
         self.assertEqual(kw["max_turns"], settings.AGENT_MAX_TURNS)
 
 
@@ -270,6 +271,42 @@ class CutOffRetryTests(RedisCase):
         self.assertEqual(events[-1], ("error", {"message": runner.MSG_CUT_OFF}))
         run.refresh_from_db()
         self.assertEqual(run.status, "error")
+
+    def _writing(self, run, error):
+        """A result that records an invoice write (as a tool call would) and then fails."""
+        class WritingResult(FakeResult):
+            async def stream_events(inner):
+                await AgentAction.objects.acreate(
+                    run_id=run.id, chat_id=run.chat_id, tool="create_draft_invoice", args_hash="h",
+                    arguments={}, result="created", invoice_id=1, bill_number="BILL-2026-0099",
+                )
+                async for e in FakeResult.stream_events(inner):
+                    yield e
+        return WritingResult([delta("partial")], error=error)
+
+    def test_a_cut_off_run_that_already_wrote_is_not_retried_and_names_the_bill(self):
+        run = self.new_run()
+        n_attempts = self._run(run, lambda n, s: self._writing(run, IncompleteStreamError("cut")))
+        self.assertEqual(n_attempts, 1)                                          # a retry could create a second draft
+        events = self.events_of(run)
+        self.assertNotIn("reset", [k for k, _ in events])
+        kind, data = events[-1]
+        self.assertEqual(kind, "error")
+        self.assertIn(runner.MSG_CUT_OFF, data["message"])
+        self.assertIn("BILL-2026-0099 was created", data["message"])
+        self.assertIn("Billing page", data["message"])
+
+    def test_any_failure_after_a_write_tells_the_user_which_invoice_exists(self):
+        run = self.new_run()
+        self._run(run, lambda n, s: self._writing(run, ValueError("boom")))
+        message = self.events_of(run)[-1][1]["message"]
+        self.assertIn(runner.MSG_FAILED, message)
+        self.assertIn("BILL-2026-0099 was created", message)
+
+    def test_a_failure_without_any_write_has_no_note(self):
+        run = self.new_run()
+        self._run(run, lambda n, s: FakeResult([], error=ValueError("boom")))
+        self.assertEqual(self.events_of(run)[-1], ("error", {"message": runner.MSG_FAILED}))
 
     def test_other_errors_are_not_retried(self):
         run = self.new_run()

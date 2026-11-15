@@ -1,0 +1,52 @@
+# AI assistant ("agent") — instructions
+
+Read before changing anything in `backend/ai_agent/` (tools, prompt, guides, write tools) or the chat UI (`frontend/src/pages/agent/`, `components/agent/`, `hooks/useAgent.js`, `services/agentApi.js`). Each rule is an owner decision or a bug found live. Also follow `architecture.md` + `verification.md` (backend) and `frontend.md` (UI).
+
+## Overview
+Admin/superuser-only chat assistant: OpenAI Agents SDK + Gemini (OpenAI-compatible endpoint), answers from the live DB via tools. Each question = a Celery task, streamed over SSE (Redis Streams). Chats are per user and stateful.
+`POST chats/<id>/messages/` → ChatRun(queued) → Celery (queue `agent`) → `services.runner.execute_run` → SDK + tools → Redis stream `agent:run:<id>` (DB /1) → `GET runs/<id>/stream/` (async view, Bearer JWT checked by hand) → browser.
+Endpoints (all `IsAdminOrSuperuser`): `chats/`, `chats/<uuid>/` (get/rename/soft-delete), `chats/<uuid>/messages/` (history newest-first, paginated; POST sends), `runs/<uuid>/stream/`.
+Models: `Chat` (UUID, soft delete), `ChatItem` (SDK items as JSON; `kind`/`text` derived), `ChatRun` (one ACTIVE run per chat, partial unique constraint), `AgentAction` (write audit + idempotency).
+Folders: `config/` (Gemini client + shims), `instructions/` (`base.py` prompt + `guides/*.md` = product content for the model), `my_agents/`, `my_tool/` (`ALL_TOOLS`, `WRITE_TOOL_NAMES`, `STEP_LABELS`), `schemas/` (pydantic), `selectors/`, `services/` (`chats runs session streaming runner invoicing`), `tasks.py`. Never name a module/package `agents` (shadows the SDK).
+
+## Hard rules
+1. **Celery/Redis: `ai_agent` ONLY** (everything else keeps "catch-up on read, no cron/celery"). Task routed to queue `agent` (`CELERY_TASK_ROUTES`): `celery -A backend worker -Q agent -l info` (a default-queue worker with old code once ate tasks → `NotRegistered`). Restart the worker after any `ai_agent` change.
+2. **Tools = thin wrappers over existing selectors/services**: no own queries or business logic, no money arithmetic by model or tool (billing's calculators produce every number). All via `@agent_tool` (`my_tool/base.py`): runs as the asking user (`activity_log.middleware.acting_as`), closes its DB connection, `ToolInputError` → plain sentence, other errors → generic message (never a traceback), output capped at 6000 chars, timing logged.
+3. **Tool schemas go out on every model call** (20 tools ≈ 4,000 tokens): short descriptions, few broad tools, small fixed query counts (200 ms rule vs a remote DB). Over budget by owner's choice: `business_worth` (~6 queries), `sales_summary` all-time (~8); `customer_info`/`supplier_info` detail capped at 3 matches.
+4. **Prompt:** SHORT, STATIC part first (Gemini prefix cache), date/user tail last. Detail lives in `guides/*.md` via `get_guide(topic)` (its calls/outputs are never stored in the session); rules needed at write time go in TOOL DESCRIPTIONS. New topic → `guide_tool.Topic` (+ `TOPIC_HINTS` if the name doesn't say when to open it — without it "who built you?" got the "no tool" reply). Guides hold only facts verified in code or given by the owner. Prompt-size tests must pass.
+5. **Chat isolation:** every chat/run query scoped to `request.user`; foreign id → 404 (not 403); soft delete only.
+6. **Bounded reads:** `AGENT_TOOL_ROW_CAP`, pagination everywhere; history = last `AGENT_HISTORY_ITEM_LIMIT` items cut at a user message (extended back to that turn's user message, ≤5×).
+7. **Lookups (`find_*`):** a code is exact; a name matching exactly one record (case-insensitive) wins; text matching only via `search_q` in selectors; products load with `select_related("rate")` and stock is computed only for a UNIQUE match; bulk-load products (`in_bulk`), never one query per line.
+
+## Writes: invoice DRAFTS only (owner decisions)
+Code: `services/invoicing.py`, `my_tool/invoice_tool.py`, calling billing's `create_invoice` / `update_invoice_items` / `delete_invoice`.
+- **NEVER:** confirm, payments/advances, prices (rate list), shelves, create customers/products. An advance moves cash even on a DRAFT, so payment type is always after-delivery and updates send no payment fields (an existing advance is untouched). Humans confirm in Billing.
+- **Update/discard:** any draft by bill number. Discard refuses drafts with an advance (it would refund cash); billing refuses confirmed invoices. Update re-sends ALL lines (billing replaces them) and that clears shelf choices → the summary adds a heads-up.
+- **Create** when the customer is unique and ≥1 product is unique with a quantity; several matches → list and ask, create nothing until every line is settled; none → say so. Never ask about discount/GST/WHT/due date.
+- **Defaults** (shown as "Defaults used"): GST 0, WHT 0, no discount, due +7 days, pay after delivery. Given values are used as given; GST/WHT rounded to 2 dp.
+- **Discounts:** a bare "discount" = LINE discount on every line (unless a product is named); stored as rupees/unit, so a percent is converted in code from the current rate; positive only, never above the price (a free line gets a heads-up). Invoice discount only when the user says "invoice discount"/"whole invoice"; default percent (flat if stated). Billing's discount ≤ profit rule applies; explain refusals plainly.
+- **Safety:** admin check in every write tool (plus endpoint and worker); budgets `AGENT_WRITES_PER_HOUR` (per user) and `AGENT_WRITES_PER_RUN`, re-counted under a lock on the user row INSIDE the transaction (parallel calls in one turn); line/qty limits checked up front; finite numbers only; pydantic schemas contain nothing the model must not control; customer/product text is untrusted data (never instructions) and is markdown-escaped in summaries; summaries use only billing's print-context numbers (no cost/profit).
+- **Audit + idempotency (`AgentAction`):** unique per `(run, tool, args hash)`; invoice and row written in one transaction; a race loser rolls back and returns the winner; a replay returns the invoice as it is now (or says it no longer exists); discard re-checks the row on `IntegrityError`, else re-raises. Why: the runner's retry rolls back chat HISTORY only, not DB writes.
+- **The runner never auto-retries a run that already wrote** (AgentAction rows exist for the run): it errors instead, and every error message names the bills already created/changed.
+- `Invoice` model untouched. A new write tool needs: existing service only, admin check, `AgentAction`, per-run idempotency, the tests below, an independent audit.
+
+## Gemini compat (`config/gemini_compat.py`) — don't remove without live tests
+1. Gemini sends tool calls whole with `index=None`; the SDK merged parallel calls into corrupt arguments (HTTP 400) → each call id gets its own index.
+2. Empty completion (0 tokens) after a tool result → retry (`EMPTY_RETRIES`) with a nudge message on the wire only, never in the session.
+3. Stream ends early with no finish signal (mid-sentence) → `IncompleteStreamError` → runner rolls chat history back, publishes SSE `reset`, reruns once (`MAX_ATTEMPTS`, only if nothing was written); cut off again → clear "cut off, try again" error, never a silent partial answer.
+The client is built PER RUN and closed by `config.configs.client_scope` before the loop ends; never at import.
+
+## Reliability
+The run must ALWAYS end: hard timeout `AGENT_RUN_TIMEOUT_SECONDS` (solo pool ignores Celery limits); `mark_error` BEFORE publishing the error; stale-run sweep when a chat looks busy; duplicate delivery ignored (`mark_running` compare-and-set). Redis client socket timeout > `XREAD BLOCK`. SSE needs ASGI: `uvicorn backend.asgi:application`, not runserver. The browser uses `fetch` (`@microsoft/fetch-event-source`; EventSource can't send Authorization); a 401 → `utils/api.js` `refreshAccessToken`, reopen once. Redis Streams (not Pub/Sub) for `Last-Event-ID` replay; tokens batched ~50 ms.
+
+## Settings (`backend/settings.py`, values in `.env`)
+`GEMINI_API_KEY` (read only via `settings`), `GEMINI_BASE_URL`, `AGENT_NAME`, `AGENT_MODEL`, `AGENT_MAX_TURNS`, `AGENT_HISTORY_ITEM_LIMIT`, `AGENT_TOOL_ROW_CAP`, `AGENT_MAX_INPUT_CHARS`, `AGENT_RUN_TIMEOUT_SECONDS`, `AGENT_REDIS_URL` (`REDIS_URL`+`/1`), `AGENT_STREAM_TTL_SECONDS`, `AGENT_WRITES_PER_HOUR`, `AGENT_WRITES_PER_RUN`, `AGENT_INVOICE_MAX_LINES`, `AGENT_INVOICE_MAX_QTY`; throttle scope `agent` (20/min, messages endpoint). Gemini free tier is tiny (flash: 20 requests/day per model+project; one question costs 2–3).
+
+## Testing
+Local SQLite only, never production; run tests in the BACKGROUND and read the full output. Use a fake model or the scripted fake Gemini client through the REAL SDK (`tests/test_sdk_integration.py`); configured Redis with unique per-run keys; `TransactionTestCase` for tool tests (tools run in threads). Write tools need tests for: defaults, given values, discount conversion, every refusal, admin/non-admin, hourly + per-run budgets, idempotency incl. lost race, replay of a discarded draft, no retry after a write, confirmed/advance drafts untouched, no cash movement, markdown escaping. Live Gemini checks create throwaway data in the LOCAL DB: clean up (discard drafts) and re-check retry/stream changes live repeatedly (failures are ~1 in 12). No retention job exists (owner declined).
+
+## Frontend
+Route `/agent/:chatId?` (one route, no remount), lazy, admin/superuser only, NOT inside `<Layout>` (own chat sidebar + "Back to software"; the main header has an admin-only "Assistant" button). `react-markdown` + `remark-gfm`: no raw HTML, no images, links only relative or https. `hooks/useAgent.js`: optimistic messages, per-frame token batching, SSE events `step step_done token done error reset`. Mobile: drawer sidebar, 44 px targets, 16 px composer text. Follow `frontend.md` / `frontend_redesign.md`.
+
+## Run locally
+`celery -A backend worker -Q agent -l info` · `uvicorn backend.asgi:application --port 8000 --reload` · `cd frontend && npm run dev` (log in as admin → "Assistant").

@@ -5,6 +5,8 @@ import remarkGfm from 'remark-gfm';
 
 // Right-align numeric cells (amounts) so columns of figures line up.
 const NUMERIC = /^[\s\-+(]*(?:Rs\.?|PKR)?\s*[\d,]+(?:\.\d+)?\)?\s*%?\s*$/i;
+const isSafeHref = (href) =>
+    typeof href === 'string' && (/^https:\/\//i.test(href) || (href.startsWith('/') && !href.startsWith('//')));
 const cellText = (children) => (Array.isArray(children) ? children.join('') : String(children ?? ''));
 
 // Element styling lives here (semantic tokens only) instead of a typography
@@ -25,10 +27,17 @@ const components = {
     blockquote: (props) => (
         <blockquote className="mt-3 border-l-4 border-primary-200 bg-primary-50/60 rounded-r-lg pl-4 pr-3 py-2 text-neutral-700" {...props} />
     ),
+    // Answers can contain text from customer/product names. Never load images (a crafted image URL is a
+    // data-exfiltration channel) and only link to app paths ("/billing/...") or https pages.
+    img: () => null,
     a: ({ href, children }) => (
-        <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent-600 underline underline-offset-2 hover:text-accent-700">
-            {children}
-        </a>
+        isSafeHref(href) ? (
+            <a href={href} target="_blank" rel="noopener noreferrer" className="text-accent-600 underline underline-offset-2 hover:text-accent-700">
+                {children}
+            </a>
+        ) : (
+            <span>{children}</span>
+        )
     ),
     code: ({ inline, className, children, ...props }) =>
         inline || !/\n/.test(String(children)) ? (

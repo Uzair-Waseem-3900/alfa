@@ -7,7 +7,7 @@ from django.test import SimpleTestCase, TransactionTestCase
 from django.utils import timezone
 
 from ai_agent.instructions.base import build_instructions
-from ai_agent.my_tool import ALL_TOOLS, STEP_LABELS
+from ai_agent.my_tool import ALL_TOOLS, STEP_LABELS, WRITE_TOOL_NAMES
 from ai_agent.my_tool.base import MAX_TOOL_CHARS, ToolInputError, agent_tool, to_text
 from ai_agent.my_tool.guide_tool import TOPICS
 from ai_agent.my_tool.periods import resolve_period
@@ -88,6 +88,8 @@ class PromptTests(SimpleTestCase):
         self.assertIn("Today:", text.splitlines()[-1])
         self.assertIn("Awaab Sohail (admin)", text.splitlines()[-1])
         self.assertTrue(all(t in text for t in TOPICS))
+        self.assertIn("DRAFT invoices", text)                            # the only write scope
+        self.assertIn('get_guide("invoices")', text)
         # Regression: "who built you / about the company" was answered with the
         # "no tool can answer" fallback because nothing said `about` covers it.
         self.assertIn('call get_guide("about")', text)
@@ -121,8 +123,11 @@ class ToolSmokeTests(TransactionTestCase):
             "expenses_summary": {"period": "this_year", "list_recent": True},
             "profit_report": {"view": "current_month"},
             "tax_position": {},
+            "find_customer_for_invoice": {"search": "zzz"}, "find_product_for_invoice": {"search": "zzz"},
         }
-        self.assertEqual(set(calls), {t.name for t in ALL_TOOLS}, "a tool has no smoke test")
+        # Write tools and show_draft_invoice need real data + a chat run: covered in test_invoice_*.
+        needs_data = WRITE_TOOL_NAMES | {"show_draft_invoice"}
+        self.assertEqual(set(calls), {t.name for t in ALL_TOOLS} - needs_data, "a tool has no smoke test")
         for name, args in calls.items():
             out = self._run(name, args)
             self.assertFalse(out.startswith("The tool failed"), f"{name}: {out}")

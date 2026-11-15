@@ -10,6 +10,8 @@ class AgentContext:
     """Passed to the Runner as `context=`; every tool reads the asking user
     from here (never from globals) so each tool runs AS that user."""
     user: "User"
+    run_id: str | None = None    # the ChatRun answering this message (audit + idempotency key)
+    chat_id: str | None = None
 
     @property
     def name(self) -> str:

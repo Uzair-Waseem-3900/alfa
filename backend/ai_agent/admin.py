@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Chat, ChatItem, ChatRun
+from .models import AgentAction, Chat, ChatItem, ChatRun
 
 
 @admin.register(Chat)
@@ -24,3 +24,12 @@ class ChatRunAdmin(admin.ModelAdmin):
 class ChatItemAdmin(admin.ModelAdmin):
     list_display = ("id", "chat", "created_at")
     raw_id_fields = ("chat",)
+
+
+@admin.register(AgentAction)
+class AgentActionAdmin(admin.ModelAdmin):
+    list_display = ("id", "tool", "result", "bill_number", "user", "created_at")
+    list_filter = ("tool", "result")
+    raw_id_fields = ("user", "chat", "run")
+    readonly_fields = ("arguments",)
+

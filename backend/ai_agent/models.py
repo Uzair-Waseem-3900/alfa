@@ -145,3 +145,64 @@ class ChatRun(models.Model):
 
     def __str__(self):
         return f"{self.id} [{self.status}]"
+
+
+# ---------------------------------------------------------------------------
+# AgentAction  (audit trail + idempotency for the assistant's WRITES)
+# ---------------------------------------------------------------------------
+
+class AgentAction(models.Model):
+    """
+    One row per change the assistant made to business data (currently: invoice
+    drafts created / edited / discarded).
+
+    Two jobs:
+      * AUDIT — who asked (user), in which chat/run, what arguments, which
+        invoice. `invoice_id` is a plain integer, deliberately NOT a foreign
+        key: the audit trail must outlive the invoice and must not couple this
+        app to billing's schema.
+      * IDEMPOTENCY — unique per (run, tool, args_hash). If a run is retried
+        after a cut-off model stream, the retried attempt repeats the same tool
+        call; the partial unique index turns the repeat into "return what was
+        already done" instead of a second invoice. (Rolling back the chat
+        history does NOT undo database writes, so this is what prevents
+        duplicates.)
+    """
+
+    class Result(models.TextChoices):
+        CREATED   = "created", "Draft created"
+        UPDATED   = "updated", "Draft updated"
+        DISCARDED = "discarded", "Draft discarded"
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="agent_actions",
+    )
+    chat = models.ForeignKey(Chat, null=True, on_delete=models.SET_NULL, related_name="actions")
+    run  = models.ForeignKey(ChatRun, null=True, on_delete=models.SET_NULL, related_name="actions")
+    tool = models.CharField(max_length=40)
+    args_hash   = models.CharField(max_length=64)
+    arguments   = models.JSONField(default=dict)
+    result      = models.CharField(max_length=12, choices=Result.choices)
+    invoice_id  = models.PositiveIntegerField(null=True, blank=True)
+    bill_number = models.CharField(max_length=30, blank=True, default="")
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name        = "Agent Action"
+        verbose_name_plural = "Agent Actions"
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["run", "tool", "args_hash"],
+                condition=Q(run__isnull=False),
+                name="uniq_agent_action_per_run",
+            ),
+        ]
+        indexes = [
+            # the hourly write-budget check: "this user's actions in the last hour"
+            models.Index(fields=["user", "-created_at"], name="idx_agentaction_user_time"),
+        ]
+
+    def __str__(self):
+        return f"{self.tool} {self.bill_number or ''} [{self.result}]"
+

@@ -30,8 +30,8 @@ MAX_TOOL_CHARS = 6000
 SLOW_TOOL_SECONDS = 0.2   # the project's per-endpoint budget; slower is logged as a warning
 
 
-class ToolInputError(Exception):
-    """Bad/unsupported input — the message is shown to the model verbatim."""
+# Re-exported so existing `from .base import ToolInputError` imports keep working.
+from ..exceptions import ToolInputError  # noqa: E402,F401
 
 
 def row_cap() -> int:
@@ -56,7 +56,30 @@ def to_text(payload) -> str:
     return text
 
 
-def agent_tool(func=None, **tool_kwargs):
+def _refuse_unknown_arguments(tool) -> None:
+    """The SDK silently drops arguments a tool does not declare. For tools that CHANGE data that is
+    dangerous (the model could think it set an advance/price/status): answer with an error instead."""
+    original = tool.on_invoke_tool
+    allowed = set(tool.params_json_schema.get("properties", {}))
+
+    async def guarded(ctx, input_json):
+        try:
+            data = json.loads(input_json or "{}")
+        except ValueError:
+            data = None
+        if isinstance(data, dict):
+            unknown = sorted(set(data) - allowed)
+            if unknown:
+                return (
+                    f"Cannot do that: unknown argument(s) {', '.join(unknown)}. Nothing was changed. "
+                    "Payments, advances, prices, shelves and status cannot be set by this tool."
+                )
+        return await original(ctx, input_json)
+
+    tool.on_invoke_tool = guarded
+
+
+def agent_tool(func=None, *, strict_args=False, **tool_kwargs):
     def decorate(f):
         @functools.wraps(f)
         def wrapper(ctx, *args, **kwargs):
@@ -75,6 +98,9 @@ def agent_tool(func=None, **tool_kwargs):
                 level = logging.WARNING if elapsed > SLOW_TOOL_SECONDS else logging.INFO
                 logger.log(level, "agent tool %s took %.0f ms", f.__name__, elapsed * 1000)
 
-        return function_tool(wrapper, **tool_kwargs)
+        tool = function_tool(wrapper, **tool_kwargs)
+        if strict_args:
+            _refuse_unknown_arguments(tool)
+        return tool
 
     return decorate(func) if func is not None else decorate

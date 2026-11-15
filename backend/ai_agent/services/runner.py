@@ -18,7 +18,9 @@ from ..models import ChatRun
 from ..my_agents.main_agent import build_agent
 from ..my_tool import step_label
 from ..schemas.context import AgentContext
+from ..selectors.invoicing import count_run_writes
 from . import runs as run_service
+from .invoicing import writes_note
 from .session import DjangoSession
 from .streaming import RunPublisher
 
@@ -52,7 +54,7 @@ async def _attempt(run, user, session, publisher) -> str:
         build_agent(),
         input=run.user_message,
         session=session,
-        context=AgentContext(user=user),
+        context=AgentContext(user=user, run_id=str(run.id), chat_id=str(run.chat_id)),
         max_turns=settings.AGENT_MAX_TURNS,
     )
 
@@ -104,7 +106,9 @@ async def execute_run(run_id) -> None:
                     final_text = await _attempt(run, user, session, publisher)
                     break
                 except IncompleteStreamError:
-                    if attempt == MAX_ATTEMPTS:
+                    # Never re-run a request that already CHANGED data: the retried attempt may
+                    # phrase the same intent differently and slip past the idempotency key.
+                    if attempt == MAX_ATTEMPTS or await sync_to_async(count_run_writes)(run_id):
                         raise
                     logger.warning("agent run %s: model stream was cut off (attempt %d/%d); retrying",
                                    run_id, attempt, MAX_ATTEMPTS)
@@ -129,7 +133,12 @@ async def execute_run(run_id) -> None:
         await sync_to_async(run_service.mark_error)(run_id, f"{type(exc).__name__}: {exc}")
         try:
             await publisher.flush_tokens()
-            await publisher.publish("error", message=_friendly_error(exc))
+            message = _friendly_error(exc)
+            try:   # a run can fail AFTER a write: the user must know which invoices it already touched
+                message += await sync_to_async(writes_note)(run_id)
+            except Exception:  # noqa: BLE001
+                logger.exception("could not build the writes note for run %s", run_id)
+            await publisher.publish("error", message=message)
         except Exception:  # noqa: BLE001
             logger.exception("could not publish the error event for run %s", run_id)
     finally:

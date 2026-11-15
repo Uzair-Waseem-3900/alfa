@@ -294,6 +294,11 @@ AGENT_HISTORY_ITEM_LIMIT = int(os.getenv("AGENT_HISTORY_ITEM_LIMIT", "40"))  # s
 AGENT_TOOL_ROW_CAP = int(os.getenv("AGENT_TOOL_ROW_CAP", "25"))       # max rows any tool returns
 AGENT_MAX_INPUT_CHARS = int(os.getenv("AGENT_MAX_INPUT_CHARS", "2000"))
 AGENT_RUN_TIMEOUT_SECONDS = int(os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "180"))  # hard cap for one answer
+# Invoice DRAFT writes by the assistant (create / edit / discard).
+AGENT_WRITES_PER_HOUR = int(os.getenv("AGENT_WRITES_PER_HOUR", "30"))     # per user
+AGENT_WRITES_PER_RUN = int(os.getenv("AGENT_WRITES_PER_RUN", "10"))       # per question (one model turn can emit many parallel calls)
+AGENT_INVOICE_MAX_LINES = int(os.getenv("AGENT_INVOICE_MAX_LINES", "30"))
+AGENT_INVOICE_MAX_QTY = int(os.getenv("AGENT_INVOICE_MAX_QTY", "100000"))
 # Event stream (Redis Streams) — same Redis server as Celery, separate DB index
 # and key prefix so broker data on /0 is untouched.
 AGENT_REDIS_URL = f"{REDIS_URL}/1"

@@ -15,7 +15,7 @@ GUIDES_DIR = Path(__file__).resolve().parent.parent / "instructions" / "guides"
 
 Topic = Literal[
     "about", "sales", "receivables", "payables", "inventory",
-    "cash", "profit", "tax", "assets", "formatting",
+    "cash", "profit", "tax", "assets", "formatting", "invoices",
 ]
 TOPICS = Topic.__args__
 
@@ -24,6 +24,7 @@ TOPICS = Topic.__args__
 # (without this, "who built you?" was answered with "no tool can answer").
 TOPIC_HINTS = {
     "about": "you, the company, the developer",
+    "invoices": "creating/editing draft invoices",
 }
 
 
@@ -47,6 +48,6 @@ def get_guide(topic: Topic) -> str:
     and rules in that business area before answering.
 
     Args:
-        topic: One of about, sales, receivables, payables, inventory, cash, profit, tax, assets, formatting.
+        topic: One of about, sales, receivables, payables, inventory, cash, profit, tax, assets, formatting, invoices.
     """
     return _read(topic)

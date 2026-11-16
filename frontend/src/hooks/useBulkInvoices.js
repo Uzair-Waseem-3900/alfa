@@ -35,7 +35,7 @@ const replaceRow = (items, updated) => items.map((row) => (row.id === updated.id
 
 // One batch: loaded from the database (source of truth), then followed live over SSE while rows are working.
 export const useBulkBatch = (batchId) => {
-    const toast = useToast();
+    const { toast } = useToast();
     const [batch, setBatch] = useState(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);

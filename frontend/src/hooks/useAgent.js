@@ -24,7 +24,7 @@ const mergeMessagesAsc = (a, b) => {
 /* ------------------------------------------------------------------ chats */
 
 export const useAgentChats = () => {
-    const toast = useToast();
+    const { toast } = useToast();
     const [chats, setChats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [loadingMore, setLoadingMore] = useState(false);
@@ -121,7 +121,7 @@ export const useAgentChats = () => {
 //   live    — the optimistic user/assistant pair(s) for the current session;
 //             replaced by server truth once a run succeeds
 export const useChatConversation = (chatId, { onRunFinished } = {}) => {
-    const toast = useToast();
+    const { toast } = useToast();
     const [history, setHistory] = useState([]);
     const [live, setLive] = useState([]);
     const [loadingHistory, setLoadingHistory] = useState(false);

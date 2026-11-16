@@ -32,7 +32,7 @@ const liveCounts = (items) => items.reduce((acc, r) => ({
 // Like the assistant page it sits outside <Layout> (own history sidebar + "Back to software").
 const BulkInvoicesPage = () => {
     const { user } = useAuth();
-    const toast = useToast();
+    const { toast } = useToast();
     const navigate = useNavigate();
     const { batchId } = useParams();
 

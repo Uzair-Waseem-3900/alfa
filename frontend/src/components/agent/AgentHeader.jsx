@@ -21,7 +21,10 @@ const itemFade = {
 
 // ─── AgentHeader ───────────────────────────────────────────────────────────
 
-const AgentHeader = ({ assistantName, sidebarOpen, onToggleSidebar, onNewChat }) => (
+const AgentHeader = ({
+    assistantName, sidebarOpen, onToggleSidebar, onNewChat,
+    subtitle = 'Business assistant', newLabel = 'New chat', actions = null,
+}) => (
     <motion.header
         className="flex-shrink-0 h-14 flex items-center gap-1 sm:gap-2 px-2 sm:px-4 border-b border-neutral-200 bg-white/90 backdrop-blur"
         variants={headerEntrance}
@@ -59,7 +62,7 @@ const AgentHeader = ({ assistantName, sidebarOpen, onToggleSidebar, onNewChat })
             <AssistantAvatar />
             <div className="min-w-0 leading-tight">
                 <h1 className="text-sm font-semibold text-neutral-900 truncate">{assistantName}</h1>
-                <p className="hidden sm:block text-xs text-neutral-500">Business assistant</p>
+                <p className="hidden sm:block text-xs text-neutral-500">{subtitle}</p>
             </div>
         </motion.div>
 
@@ -81,7 +84,7 @@ const AgentHeader = ({ assistantName, sidebarOpen, onToggleSidebar, onNewChat })
             <motion.button
                 type="button"
                 onClick={onNewChat}
-                aria-label="New chat"
+                aria-label={newLabel}
                 whileHover={{ backgroundColor: 'rgba(0,0,0,0.05)' }}
                 whileTap={{ scale: 0.88, rotate: 15 }}
                 transition={{ type: 'spring', stiffness: 500, damping: 20 }}
@@ -90,6 +93,8 @@ const AgentHeader = ({ assistantName, sidebarOpen, onToggleSidebar, onNewChat })
                 <SquarePen className="w-5 h-5" />
             </motion.button>
         </motion.div>
+
+        {actions}
 
         {/* ── Back to software ──────────────────────────────────────────── */}
         <motion.div variants={itemFade}>
@@ -123,6 +128,9 @@ AgentHeader.propTypes = {
     sidebarOpen:     PropTypes.bool.isRequired,
     onToggleSidebar: PropTypes.func.isRequired,
     onNewChat:       PropTypes.func.isRequired,
+    subtitle:        PropTypes.string,
+    newLabel:        PropTypes.string,
+    actions:         PropTypes.node,
 };
 
 export default AgentHeader;

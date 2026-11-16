@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Loader2, PanelLeft, Plus, Square, X } from 'lucide-react';
+import { Loader2, Plus, Square, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { bulkApi } from '../../services/agentApi';
 import { useBulkBatch, useBulkBatches, useLinkNames } from '../../hooks/useBulkInvoices';
 import { extractErrorMessage } from '../../utils/errorMessage';
+import AgentHeader from '../../components/agent/AgentHeader';
+import SidebarShell from '../../components/agent/SidebarShell';
 import BulkBatchItem from '../../components/agent/BulkBatchItem';
 import { defaultBatchLabel } from '../../utils/bulkBatch';
 import BulkCompose from '../../components/agent/BulkCompose';
@@ -14,6 +16,8 @@ import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import InlineAlert from '../../components/ui/InlineAlert';
 
 const SIDEBAR_POLL_MS = 4000;
+const MD_BREAKPOINT = 768;
+const isMobile = () => window.innerWidth < MD_BREAKPOINT;
 const BATCH_STATUS_CHIP = { active: 'processing', waiting: 'needs_attention', finished: 'done', cancelled: 'cancelled' };
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -59,7 +63,7 @@ const BulkInvoicesPage = () => {
         return () => clearInterval(timer);
     }, [anyWorking, refreshSilently]);
 
-    const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [sidebarOpen, setSidebarOpen] = useState(() => !isMobile());   // open on desktop, closed drawer on mobile
     const [starting, setStarting] = useState(false);
     const [startError, setStartError] = useState(null);
     const [toDelete, setToDelete] = useState(null);
@@ -116,7 +120,7 @@ const BulkInvoicesPage = () => {
         }
     };
 
-    const goto = (path) => { navigate(path); setSidebarOpen(false); };
+    const goto = (path) => { navigate(path); if (isMobile()) setSidebarOpen(false); };
     const batch = view.batch;
     const counts = batch ? batch.items.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] || 0) + 1 }), {}) : {};
     const working = (counts.queued || 0) + (counts.processing || 0);
@@ -124,10 +128,7 @@ const BulkInvoicesPage = () => {
 
     return (
         <div className="flex h-dvh overflow-hidden bg-white">
-            {sidebarOpen && <div className="fixed inset-0 z-30 bg-black/50 md:hidden" onClick={() => setSidebarOpen(false)} aria-hidden="true" />}
-
-            <aside aria-label="Bulk invoice history"
-                className={`${sidebarOpen ? 'flex' : 'hidden'} md:flex fixed inset-y-0 left-0 z-40 w-[85vw] max-w-xs md:static md:w-72 md:max-w-none flex-shrink-0 flex-col border-r border-neutral-200 bg-neutral-50`}>
+            <SidebarShell open={sidebarOpen} onClose={() => setSidebarOpen(false)} label="Bulk invoice history">
                 <div className="flex items-center gap-2 p-3">
                     <button type="button" onClick={() => goto('/agent/bulk')}
                         className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 min-h-[44px] text-sm font-semibold text-neutral-800 hover:bg-neutral-50 shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
@@ -167,25 +168,22 @@ const BulkInvoicesPage = () => {
                         </ul>
                     )}
                 </nav>
-            </aside>
+            </SidebarShell>
 
             <div className="flex flex-1 min-w-0 flex-col">
-                <header className="flex-shrink-0 h-14 flex items-center gap-1 sm:gap-2 px-2 sm:px-4 border-b border-neutral-200 bg-white">
-                    <button type="button" onClick={() => setSidebarOpen(true)} aria-label="Show bulk invoice history"
-                        className="md:hidden w-11 h-11 flex items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100 cursor-pointer">
-                        <PanelLeft className="w-5 h-5" />
-                    </button>
-                    <div className="flex-1 min-w-0 leading-tight">
-                        <h1 className="truncate text-sm font-semibold text-neutral-900">Bulk invoices</h1>
-                        <p className="hidden sm:block text-xs text-neutral-500">Create many draft invoices at once</p>
-                    </div>
-                    <Link to="/agent" className="hidden sm:inline-flex items-center rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100">Assistant</Link>
-                    <Link to="/dashboard"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 min-h-[44px] text-sm font-medium text-primary-700 hover:bg-primary-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
-                        <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-                        <span className="sm:hidden">Back</span><span className="hidden sm:inline">Back to software</span>
-                    </Link>
-                </header>
+                <AgentHeader
+                    assistantName="Bulk invoices"
+                    subtitle="Create many draft invoices at once"
+                    newLabel="New bulk batch"
+                    sidebarOpen={sidebarOpen}
+                    onToggleSidebar={() => setSidebarOpen((o) => !o)}
+                    onNewChat={() => goto('/agent/bulk')}
+                    actions={(
+                        <Link to="/agent" className="hidden sm:inline-flex items-center rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100">
+                            Assistant
+                        </Link>
+                    )}
+                />
 
                 {!batchId ? (
                     <BulkCompose linkNames={linkNames} starting={starting} error={startError} onStart={start} />

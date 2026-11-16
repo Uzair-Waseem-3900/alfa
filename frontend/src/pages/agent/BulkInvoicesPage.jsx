@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { Loader2, Plus, Square, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -15,6 +16,8 @@ import BulkRow, { StatusChip } from '../../components/agent/BulkRow';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import InlineAlert from '../../components/ui/InlineAlert';
 
+// Staggered entrance of the history entries: same as the assistant's chat list.
+const listContainer = { hidden: {}, show: { transition: { staggerChildren: 0.045 } } };
 const SIDEBAR_POLL_MS = 4000;
 const MD_BREAKPOINT = 768;
 const isMobile = () => window.innerWidth < MD_BREAKPOINT;
@@ -149,7 +152,7 @@ const BulkInvoicesPage = () => {
                     ) : batches.items.length === 0 ? (
                         <p className="px-4 py-10 text-center text-sm text-neutral-500">No bulk invoices yet.</p>
                     ) : (
-                        <ul className="space-y-0.5">
+                        <motion.ul className="space-y-0.5" variants={listContainer} initial="hidden" animate="show">
                             {batches.items.map((listed) => {
                                 const b = listed.id === batchId && view.batch ? { ...listed, ...liveCounts(view.batch.items) } : listed;
                                 return (
@@ -165,7 +168,7 @@ const BulkInvoicesPage = () => {
                                     </button>
                                 </li>
                             )}
-                        </ul>
+                        </motion.ul>
                     )}
                 </nav>
             </SidebarShell>

@@ -15,3 +15,15 @@ def run_agent_task(run_id: str) -> None:
         asyncio.run(execute_run(run_id))
     finally:
         close_old_connections()
+
+
+@shared_task(ignore_result=True)
+def run_bulk_item_task(item_id: int) -> None:
+    """Work ONE bulk-invoice row (own queue `agent_bulk`: the rows of a batch run one after another)."""
+    from .services.bulk_runner import execute_bulk_item
+
+    close_old_connections()
+    try:
+        asyncio.run(execute_bulk_item(item_id))
+    finally:
+        close_old_connections()

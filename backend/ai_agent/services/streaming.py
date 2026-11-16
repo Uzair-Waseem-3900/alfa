@@ -16,12 +16,18 @@ from django.conf import settings
 from ..schemas.events import TERMINAL_EVENTS, dump_event
 
 STREAM_PREFIX = "agent:run:"
+BATCH_PREFIX = "agent:bulk:"
 BLOCK_MS = 15_000          # heartbeat interval while idle
+STREAM_MAXLEN = 10_000        # hard cap per stream (the TTL expires it; this bounds a runaway one)
 TOKEN_FLUSH_SECONDS = 0.05  # batch token deltas: ~20 writes/s max instead of one per token
 
 
 def stream_key(run_id) -> str:
     return f"{STREAM_PREFIX}{run_id}"
+
+
+def batch_key(batch_id) -> str:
+    return f"{BATCH_PREFIX}{batch_id}"
 
 
 def new_client() -> aioredis.Redis:
@@ -37,8 +43,8 @@ def new_client() -> aioredis.Redis:
 
 
 class RunPublisher:
-    def __init__(self, run_id, client: aioredis.Redis | None = None):
-        self.key = stream_key(run_id)
+    def __init__(self, run_id, client: aioredis.Redis | None = None, *, key: str | None = None):
+        self.key = key or stream_key(run_id)
         self.client = client or new_client()
         self._buffer: list[str] = []
         self._last_flush = time.monotonic()
@@ -65,7 +71,7 @@ class RunPublisher:
 
     async def _xadd(self, event_type: str, data: str) -> None:
         pipe = self.client.pipeline(transaction=False)
-        pipe.xadd(self.key, {"event": event_type, "data": data})
+        pipe.xadd(self.key, {"event": event_type, "data": data}, maxlen=STREAM_MAXLEN, approximate=True)
         pipe.expire(self.key, settings.AGENT_STREAM_TTL_SECONDS)
         await pipe.execute()
 
@@ -81,6 +87,10 @@ async def read_events(
     run_id,
     last_event_id: str | None = None,
     is_active: Callable[[], Awaitable[bool]] | None = None,
+    *,
+    key: str | None = None,
+    terminal: frozenset = TERMINAL_EVENTS,
+    terminal_needs_idle: bool = False,
 ) -> AsyncIterator[str]:
     """Yield SSE frames until a terminal event. Replays from `last_event_id`
     (a Redis entry id) when the client reconnects.
@@ -88,9 +98,13 @@ async def read_events(
     `is_active` is checked whenever the stream goes idle: if the run is no
     longer queued/running in the DB but no terminal event arrived (worker
     died, stream expired), emit a synthetic `error` and stop instead of
-    pinging forever."""
+    pinging forever.
+
+    `terminal_needs_idle` (batch streams): a terminal event only ends the stream if `is_active()` says nothing is
+    running any more. A batch stream keeps old `batch_idle` events from earlier rounds; replaying one must not
+    close a stream whose next round has already started."""
     client = new_client()
-    key = stream_key(run_id)
+    key = key or stream_key(run_id)
     cursor = last_event_id or "0-0"
     try:
         while True:
@@ -102,10 +116,13 @@ async def read_events(
                     leftover = await client.xread({key: cursor}, count=100)
                     if leftover:
                         continue
-                    yield sse_frame(
-                        "end", "error",
-                        dump_event("error", message="The response is no longer available."),
-                    )
+                    if terminal_needs_idle:   # a batch with nothing running is simply idle, not an error
+                        yield sse_frame("end", "batch_idle", dump_event("batch_idle", status="idle"))
+                    else:
+                        yield sse_frame(
+                            "end", "error",
+                            dump_event("error", message="The response is no longer available."),
+                        )
                     return
                 yield ": ping\n\n"   # keep proxies from closing an idle stream
                 continue
@@ -114,7 +131,7 @@ async def read_events(
                     cursor = entry_id
                     event_type = fields["event"]
                     yield sse_frame(entry_id, event_type, fields["data"])
-                    if event_type in TERMINAL_EVENTS:
+                    if event_type in terminal and not (terminal_needs_idle and is_active is not None and await is_active()):
                         return
     except asyncio.CancelledError:  # client went away
         raise

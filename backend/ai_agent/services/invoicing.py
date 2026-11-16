@@ -47,7 +47,7 @@ TWO_PLACES = Decimal("0.01")
 
 # --------------------------------------------------------------------------- guards
 
-def require_write_access(*, user, run_id) -> None:
+def require_write_access(*, user, run_id, source: str = "chat") -> None:
     """Defence in depth: the chat endpoints are already admin-only, the worker
     re-checks the user, and every write tool checks again. This is the quick
     pre-check; the authoritative budget check happens under a lock (below)."""
@@ -55,29 +55,34 @@ def require_write_access(*, user, run_id) -> None:
         raise ToolInputError("Only admins can create or change invoices.")
     if not run_id:
         raise ToolInputError("Invoices can only be changed while answering a chat message.")
-    _check_budget(user, run_id)
+    _check_budget(user, run_id, source)
 
 
-def _check_budget(user, run_id) -> None:
-    if sel.count_writes_since(user, timezone.now() - WRITE_WINDOW) >= settings.AGENT_WRITES_PER_HOUR:
+def _check_budget(user, run_id, source: str = "chat") -> None:
+    # chat and bulk have separate hourly budgets (bulk is meant for many invoices at once)
+    limit = settings.AGENT_BULK_WRITES_PER_HOUR if source == "bulk" else settings.AGENT_WRITES_PER_HOUR
+    if sel.count_writes_since(user, timezone.now() - WRITE_WINDOW, source) >= limit:
         raise ToolInputError(
-            f"The hourly limit of {settings.AGENT_WRITES_PER_HOUR} invoice changes has been reached. "
+            f"The hourly limit of {limit} invoice changes has been reached. "
             "Please make further changes in the Billing page, or try again later."
         )
-    if sel.count_run_writes(run_id) >= settings.AGENT_WRITES_PER_RUN:
+    if source == "bulk":     # one bulk row = one invoice request = one draft
+        if sel.count_run_writes(run_id) >= 1:
+            raise ToolInputError("This request already created its invoice. One request creates only one invoice.")
+    elif sel.count_run_writes(run_id) >= settings.AGENT_WRITES_PER_RUN:
         raise ToolInputError(
             f"At most {settings.AGENT_WRITES_PER_RUN} invoice changes can be made per request. "
             "Ask for the rest in a new message."
         )
 
 
-def _lock_and_recheck_budget(user, run_id) -> None:
+def _lock_and_recheck_budget(user, run_id, source: str = "chat") -> None:
     """Call as the FIRST statement inside the write transaction. One model turn can emit many
     parallel tool calls that all pass the unlocked pre-check; locking the user's row makes them
     take turns, and the re-count then sees the earlier ones. (SQLite ignores the lock; Postgres
     honours it.)"""
     get_user_model().objects.select_for_update().get(pk=user.pk)
-    _check_budget(user, run_id)
+    _check_budget(user, run_id, source)
 
 
 def explain(exc: DRFValidationError) -> str:
@@ -118,7 +123,10 @@ def _rate(product) -> Decimal:
 def _line_discount(line: InvoiceLineIn, rate: Decimal, product, *, keep: Decimal | None) -> Decimal:
     """Rupees off PER UNIT (that is how billing stores it). A percent is converted
     from the product's CURRENT rate; with neither given the existing value is kept."""
-    if line.discount_percent is not None:
+    if line.unit_rate is not None:
+        # "qty@rate": the user's own price per unit. Discount = rate list - their rate (negative = surcharge).
+        discount = quantize(rate - Decimal(str(line.unit_rate)))
+    elif line.discount_percent is not None:
         discount = quantize(rate * Decimal(str(line.discount_percent)) / Decimal("100"))
     elif line.discount_amount is not None:
         discount = quantize(Decimal(str(line.discount_amount)))
@@ -127,12 +135,51 @@ def _line_discount(line: InvoiceLineIn, rate: Decimal, product, *, keep: Decimal
     if discount > rate:
         raise ToolInputError(
             f"The discount on '{product.name}' (Rs {discount:,.2f} per unit) is more than its price (Rs {rate:,.2f})."
+            if line.unit_rate is None else
+            f"The rate Rs {line.unit_rate:,.2f} given for '{product.name}' is not a valid price (its list price is Rs {rate:,.2f})."
         )
     if discount < -rate:     # a surcharge may at most double the price
         raise ToolInputError(
             f"The surcharge on '{product.name}' (Rs {-discount:,.2f} per unit) is more than its price (Rs {rate:,.2f})."
+            if line.unit_rate is None else
+            f"The rate Rs {line.unit_rate:,.2f} given for '{product.name}' is more than double its list price (Rs {rate:,.2f}); "
+            "please check the rate."
         )
     return discount
+
+
+def _rate_notes(lines, products) -> list[str]:
+    """One heads-up per line the user priced with qty@rate: say what was stored, so it is never silent."""
+    notes = []
+    for ln in lines:
+        if ln.unit_rate is None:
+            continue
+        product = products[ln.product_id]
+        rate = product.rate.selling_price
+        diff = quantize(rate - Decimal(str(ln.unit_rate)))
+        what = "no discount" if diff == 0 else (
+            f"a discount of Rs {diff:,.2f} per unit" if diff > 0 else f"a surcharge of Rs {-diff:,.2f} per unit")
+        notes.append(
+            f"you gave a rate of Rs {rate - diff:,.2f} for {_md(product.name)} (rate list Rs {rate:,.2f}), so it is stored as {what}"
+        )
+    return notes
+
+
+def _require_looked_up(known, *, customer_id=None, product_ids=()) -> None:
+    """Refuse an id the model did not get from find_customer_for_invoice / find_product_for_invoice in this run."""
+    if known is None:
+        return
+    if customer_id is not None and customer_id not in known.customers:
+        raise ToolInputError(
+            "That customer_id did not come from find_customer_for_invoice in this request, so it may be a different "
+            "customer. Call find_customer_for_invoice with the customer name (or code) and use the id it returns. Never guess ids."
+        )
+    missing = [pid for pid in product_ids if pid not in known.products]
+    if missing:
+        raise ToolInputError(
+            f"Product id(s) {', '.join(str(m) for m in missing)} did not come from find_product_for_invoice in this request. "
+            "Call find_product_for_invoice for each product and use the ids it returns. Never guess ids."
+        )
 
 
 def _resets(line: InvoiceLineIn, what: str) -> bool:
@@ -274,9 +321,9 @@ def _replay(earlier: AgentAction, *, result: str) -> dict:
         raise ToolInputError(f"{earlier.bill_number} no longer exists as a draft (it was discarded or deleted since).")
 
 
-def _record(*, user, run_id, chat_id, tool, args_hash, arguments, result, invoice):
+def _record(*, user, run_id, chat_id, tool, args_hash, arguments, result, invoice, source="chat"):
     return AgentAction.objects.create(
-        user=user, run_id=run_id, chat_id=chat_id, tool=tool, args_hash=args_hash,
+        user=user, run_id=run_id, chat_id=chat_id, tool=tool, args_hash=args_hash, source=source,
         arguments=arguments, result=result, invoice_id=invoice.id, bill_number=invoice.bill_number,
     )
 
@@ -290,11 +337,13 @@ def _repeat_of(run_id, tool, args_hash):
 def create_draft(
     *, user, run_id, chat_id, customer_id: int, lines: list[InvoiceLineIn],
     invoice_discount: float | None, invoice_discount_type: InvoiceDiscountType, due_date: str | None,
+    source: str = "chat", known=None,
 ) -> dict:
-    require_write_access(user=user, run_id=run_id)
+    require_write_access(user=user, run_id=run_id, source=source)
     if not lines:
         raise ToolInputError("An invoice needs at least one product line.")
     _check_line_count(len(lines))
+    _require_looked_up(known, customer_id=customer_id, product_ids=[ln.product_id for ln in lines])
 
     due = _due_date(due_date)
     discount_type, discount_value = _discount_args(invoice_discount, invoice_discount_type)
@@ -328,14 +377,15 @@ def create_draft(
         defaults.append("GST 0%")
     if any(ln.wht is None for ln in lines):
         defaults.append("WHT 0%")
-    if all(ln.discount_percent is None and ln.discount_amount is None for ln in lines) and discount_value is None:
+    if all(ln.discount_percent is None and ln.discount_amount is None and ln.unit_rate is None for ln in lines) \
+            and discount_value is None:
         defaults.append("no discount")
     if due is None:
         defaults.append(f"due in {DEFAULT_DUE_DATE_DAYS} days")
 
     try:
         with transaction.atomic():
-            _lock_and_recheck_budget(user, run_id)
+            _lock_and_recheck_budget(user, run_id, source)
             invoice = create_invoice(
                 customer_id=customer_id, items=items,
                 payment_type="after_delivery", advance_amount=Decimal("0"), method_allocations=None,
@@ -345,7 +395,7 @@ def create_draft(
                 user=user,
             )
             _record(user=user, run_id=run_id, chat_id=chat_id, tool=CREATE, args_hash=args_hash,
-                    arguments=payload, result=AgentAction.Result.CREATED, invoice=invoice)
+                    arguments=payload, result=AgentAction.Result.CREATED, invoice=invoice, source=source)
     except IntegrityError:   # a concurrent identical call won; the whole transaction (invoice too) rolled back
         earlier = _repeat_of(run_id, CREATE, args_hash)
         if earlier:
@@ -356,7 +406,7 @@ def create_draft(
     except DRFValidationError as exc:
         raise ToolInputError(explain(exc))
 
-    return _result(_fresh(invoice.id), result="draft_created", defaults=defaults)
+    return _result(_fresh(invoice.id), result="draft_created", defaults=defaults, notes=_rate_notes(lines, products))
 
 
 # --------------------------------------------------------------------------- UPDATE
@@ -365,8 +415,9 @@ def update_draft(
     *, user, run_id, chat_id, bill_number: str, set_lines: list[InvoiceLineIn] | None,
     remove_product_ids: list[int] | None, invoice_discount: float | None,
     invoice_discount_type: InvoiceDiscountType, due_date: str | None, clear_invoice_discount: bool = False,
+    source: str = "chat", known=None,
 ) -> dict:
-    require_write_access(user=user, run_id=run_id)
+    require_write_access(user=user, run_id=run_id, source=source)
     set_lines, remove_product_ids = set_lines or [], remove_product_ids or []
     if clear_invoice_discount:
         invoice_discount = 0.0           # explicit "remove the invoice discount"; a bare 0 elsewhere means "not given"
@@ -408,6 +459,8 @@ def update_draft(
         if pid not in current:
             raise ToolInputError(f"Product #{pid} is not on {invoice.bill_number}, so it can't be removed.")
         del current[pid]
+    # Lines already on this draft are known; a product being ADDED must come from a lookup in this run.
+    _require_looked_up(known, product_ids=[ln.product_id for ln in set_lines if ln.product_id not in current])
     products = _load_products(ln.product_id for ln in set_lines)
     for ln in set_lines:
         product = products[ln.product_id]
@@ -429,7 +482,7 @@ def update_draft(
     items = [{"product_id": pid, **vals} for pid, vals in current.items()]
     try:
         with transaction.atomic():
-            _lock_and_recheck_budget(user, run_id)
+            _lock_and_recheck_budget(user, run_id, source)
             update_invoice_items(
                 invoice_id=invoice.id, items=items,
                 payment_type=None, advance_amount=None, method_allocations=None,   # never touch payments
@@ -438,7 +491,7 @@ def update_draft(
                 user=user,
             )
             _record(user=user, run_id=run_id, chat_id=chat_id, tool=UPDATE, args_hash=args_hash,
-                    arguments=payload, result=AgentAction.Result.UPDATED, invoice=invoice)
+                    arguments=payload, result=AgentAction.Result.UPDATED, invoice=invoice, source=source)
     except IntegrityError:
         earlier = _repeat_of(run_id, UPDATE, args_hash)
         if earlier:
@@ -447,8 +500,9 @@ def update_draft(
     except DRFValidationError as exc:
         raise ToolInputError(explain(exc))
 
-    notes = ["the shelf choices on this draft were cleared by the edit; set them again in the Billing page before confirming"] \
-        if had_shelf_choices else []
+    notes = _rate_notes(set_lines, products)
+    if had_shelf_choices:
+        notes.append("the shelf choices on this draft were cleared by the edit; set them again in the Billing page before confirming")
     return _result(_fresh(invoice.id), result="draft_updated", defaults=[], notes=notes)
 
 
@@ -461,8 +515,8 @@ def _discarded(bill: str, *, repeated: bool) -> dict:
     }
 
 
-def discard_draft(*, user, run_id, chat_id, bill_number: str) -> dict:
-    require_write_access(user=user, run_id=run_id)
+def discard_draft(*, user, run_id, chat_id, bill_number: str, source: str = "chat") -> dict:
+    require_write_access(user=user, run_id=run_id, source=source)
     payload = {"bill_number": bill_number.strip()}
     args_hash = _args_hash(DISCARD, payload)
     earlier = _repeat_of(run_id, DISCARD, args_hash)
@@ -483,10 +537,10 @@ def discard_draft(*, user, run_id, chat_id, bill_number: str) -> dict:
 
     try:
         with transaction.atomic():
-            _lock_and_recheck_budget(user, run_id)
+            _lock_and_recheck_budget(user, run_id, source)
             delete_invoice(invoice_id=invoice.id, user=user)
             _record(user=user, run_id=run_id, chat_id=chat_id, tool=DISCARD, args_hash=args_hash,
-                    arguments=payload, result=AgentAction.Result.DISCARDED, invoice=invoice)
+                    arguments=payload, result=AgentAction.Result.DISCARDED, invoice=invoice, source=source)
     except IntegrityError:
         # Only an identical concurrent discard is acceptable here (its row exists); anything else is a real error.
         earlier = _repeat_of(run_id, DISCARD, args_hash)

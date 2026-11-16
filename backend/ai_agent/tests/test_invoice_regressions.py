@@ -93,7 +93,7 @@ class FailedWritesAreNeverReportedAsSuccessTests(InvoiceWorld, TransactionTestCa
         self.tools = {t.name: t for t in ALL_TOOLS}
 
     def call(self, name, args):
-        ctx = ToolContext(context=AgentContext(user=self.admin, run_id=str(self.run.id), chat_id=str(self.chat.id)),
+        ctx = ToolContext(context=self.agent_context(),
                           tool_name=name, tool_call_id="c1", tool_arguments=json.dumps(args))
         return asyncio.run(self.tools[name].on_invoke_tool(ctx, json.dumps(args)))
 

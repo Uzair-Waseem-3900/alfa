@@ -8,6 +8,10 @@ is defined — and restricted — in exactly one place.
   done       run finished            {"text"}   (full final answer)
   error      run failed              {"message"}
   reset      discard the answer so far, a retry is starting   {"reason"}
+
+Bulk-invoice batches (their own stream, see services.streaming.batch_key):
+  item        a row changed state (full row state, safe to apply twice)
+  batch_idle  nothing is queued or processing any more   {"status"}
 """
 from typing import Literal
 
@@ -41,7 +45,24 @@ class ResetEvent(BaseModel):
     reason: str
 
 
-EventType = Literal["step", "step_done", "token", "done", "error", "reset"]
+class ItemEvent(BaseModel):
+    item_id: int
+    position: int
+    status: str
+    attempts: int = 0
+    question: str = ""
+    options: list[str] = []
+    message: str = ""
+    bill_number: str = ""
+    invoice_id: int | None = None
+    customer_label: str = ""
+
+
+class BatchIdleEvent(BaseModel):
+    status: str
+
+
+EventType = Literal["step", "step_done", "token", "done", "error", "reset", "item", "batch_idle"]
 
 _EVENT_TYPES = {
     "step": StepEvent,
@@ -50,9 +71,12 @@ _EVENT_TYPES = {
     "done": DoneEvent,
     "error": ErrorEvent,
     "reset": ResetEvent,
+    "item": ItemEvent,
+    "batch_idle": BatchIdleEvent,
 }
 
 TERMINAL_EVENTS = frozenset({"done", "error"})
+BATCH_TERMINAL_EVENTS = frozenset({"batch_idle"})
 
 
 def dump_event(event_type: EventType, **data) -> str:

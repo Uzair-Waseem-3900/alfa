@@ -94,6 +94,7 @@ const AgentPage = () => {
                 onRename={chatList.renameChat}
                 onDelete={handleDelete}
                 onTeamChats={user?.role === 'superuser' ? () => navigate('/agent/team') : undefined}
+                onBulkInvoices={() => navigate('/agent/bulk')}
             />
 
             <div className="flex flex-1 min-w-0 flex-col">

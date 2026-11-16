@@ -10,6 +10,7 @@ from purchases.services import (
 from rates.services import create_rate
 
 from ai_agent.models import Chat, ChatRun
+from ai_agent.schemas.context import AgentContext, LookupLog
 
 from .helpers import make_admin
 
@@ -54,6 +55,18 @@ class InvoiceWorld:
                 invoice_item_id=item.id,
                 allocations=[{"shelf_id": self.shelf.id, "quantity": item.quantity}], user=self.admin,
             )
+
+    def agent_context(self, run=None, *, user=None, looked_up=True, **extra):
+        """AgentContext for tool-path tests. By default the model 'has already looked up' every customer and
+        product in the world (what find_* would have recorded); looked_up=False gives the empty log."""
+        from billing.models import Customer
+        from purchases.models import Product
+        run = run or self.run
+        lookups = LookupLog(
+            customers=set(Customer.objects.values_list("id", flat=True)) if looked_up else set(),
+            products=set(Product.objects.values_list("id", flat=True)) if looked_up else set(),
+        )
+        return AgentContext(user=user or self.admin, run_id=str(run.id), chat_id=str(self.chat.id), lookups=lookups, **extra)
 
     def ctx_kwargs(self, run=None):
         run = run or self.run

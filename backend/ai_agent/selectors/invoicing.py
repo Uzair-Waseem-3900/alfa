@@ -5,6 +5,8 @@ no query logic is re-implemented here.
 """
 from django.db.models import Sum
 
+from backend.search import search_q
+
 from billing.selectors import (
     get_all_customers, get_available_purchase_batches, get_customer_outstanding,
     get_invoice_by_bill_number, get_reserved_quantity_for_product,
@@ -32,8 +34,14 @@ def _resolve(candidates: list, *, name_of, code_of, search: str | None, code: st
     return (candidates[0] if len(candidates) == 1 else None), candidates
 
 
-def find_customers(*, search: str | None, code: str | None):
+def find_customers(*, search: str | None, code: str | None, area: str | None = None, link_name_id: int | None = None):
+    """`area` narrows by the customer's address (two customers can share a name); `link_name_id` limits the
+    search to one sales-man link name (bulk invoices) via the indexed sales_man_link_name FK."""
     qs = get_all_customers(code=code) if code else get_all_customers(name=search)
+    if link_name_id:
+        qs = qs.filter(sales_man_link_name_id=link_name_id)
+    if area and area.strip():
+        qs = qs.filter(search_q(area, "address"))
     candidates = list(qs[: LOOKUP_LIMIT + 1])
     unique, _ = _resolve(candidates, name_of=lambda c: c.name, code_of=lambda c: c.code, search=search, code=code)
     return unique, candidates
@@ -85,6 +93,6 @@ def bills_written_in_run(run_id) -> list[tuple[str, str]]:
     return list(AgentAction.objects.filter(run_id=run_id).order_by("id").values_list("bill_number", "result"))
 
 
-def count_writes_since(user, since) -> int:
-    # served by idx_agentaction_user_time (user, -created_at)
-    return AgentAction.objects.filter(user=user, created_at__gte=since).count()
+def count_writes_since(user, since, source: str = "chat") -> int:
+    # served by idx_agentaction_user_time (user, -created_at); `source` is a cheap residual filter
+    return AgentAction.objects.filter(user=user, created_at__gte=since, source=source).count()

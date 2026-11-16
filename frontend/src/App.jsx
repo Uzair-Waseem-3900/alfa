@@ -170,6 +170,7 @@ import LoadingSpinner from './components/ui/LoadingSpinner';
 // Lazy: pulls in the markdown renderer + SSE client, which no other page needs.
 const AgentPage = lazy(() => import('./pages/agent/AgentPage'));
 const TeamChatsPage = lazy(() => import('./pages/agent/TeamChatsPage'));
+const BulkInvoicesPage = lazy(() => import('./pages/agent/BulkInvoicesPage'));
 
 import './App.css';
 
@@ -1202,6 +1203,15 @@ const AppContent = () => {
             never remounts the page. */}
         {/* Superuser-only read-only view of every user's chats (static "team"
             outranks the :chatId param above). */}
+        {/* Bulk invoice creation (admin/superuser): many prompts, one draft each, worked in a queue. */}
+        <Route path="/agent/bulk/:batchId?" element={
+          <ProtectedRoute>
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>
+              <BulkInvoicesPage />
+            </Suspense>
+          </ProtectedRoute>
+        } />
+
         <Route path="/agent/team/:email?/:chatId?" element={
           <ProtectedRoute>
             <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>

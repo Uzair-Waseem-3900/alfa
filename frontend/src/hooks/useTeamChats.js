@@ -6,13 +6,14 @@ const PAGE_SIZE = 25;
 
 // Generic "newest first, load more" list for a paginated team endpoint.
 // `fetchPage(page)` is null while there is nothing to load (no user selected yet).
-const usePagedList = (fetchPage, key, errorText) => {
+export const usePagedList = (fetchPage, key, errorText) => {
     const [items, setItems] = useState([]);
     const [page, setPage] = useState(0);
     const [totalPages, setTotalPages] = useState(1);
     const [loading, setLoading] = useState(false);
     const [loadingMore, setLoadingMore] = useState(false);
     const [error, setError] = useState(null);
+    const [version, setVersion] = useState(0);
 
     useEffect(() => {
         setItems([]); setPage(0); setTotalPages(1); setError(null);
@@ -30,7 +31,7 @@ const usePagedList = (fetchPage, key, errorText) => {
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; };
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [key]);
+    }, [key, version]);
 
     const loadMore = useCallback(async () => {
         if (!fetchPage || loadingMore || page >= totalPages) return;
@@ -48,7 +49,8 @@ const usePagedList = (fetchPage, key, errorText) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [key, loadingMore, page, totalPages]);
 
-    return { items, loading, loadingMore, error, hasMore: page > 0 && page < totalPages, loadMore };
+    const refresh = useCallback(() => setVersion((v) => v + 1), []);
+    return { items, loading, loadingMore, error, hasMore: page > 0 && page < totalPages, loadMore, refresh };
 };
 
 export const useTeamOwners = () =>

@@ -1,0 +1,72 @@
+"""READS for bulk invoices. Every query is scoped to the owning user (another user's batch is a 404)."""
+from datetime import timedelta
+
+from django.conf import settings
+from django.db.models import Count, Q, QuerySet
+from django.shortcuts import get_object_or_404
+from django.utils import timezone
+
+from sales_man.selectors import get_all_link_names
+
+from ..models import AgentAction, BulkBatch, BulkItem
+
+
+def get_user_batches(user) -> QuerySet:
+    """My batches newest first with row counts in ONE grouped query (served by idx_bulkbatch_user_created
+    + idx_bulkitem_batch_status). Paginated by the view."""
+    return (
+        BulkBatch.objects.filter(user=user)
+        .annotate(
+            total=Count("items"),
+            done=Count("items", filter=Q(items__status=BulkItem.Status.DONE)),
+            attention=Count("items", filter=Q(items__status=BulkItem.Status.NEEDS_ATTENTION)),
+            failed=Count("items", filter=Q(items__status__in=[BulkItem.Status.FAILED, BulkItem.Status.NOT_INVOICE])),
+            working=Count("items", filter=Q(items__status__in=BulkItem.ACTIVE_STATUSES)),
+        )
+        .order_by("-created_at")
+    )
+
+
+def get_user_batch(user, batch_id) -> BulkBatch:
+    return get_object_or_404(BulkBatch.objects.filter(user=user), pk=batch_id)
+
+
+def get_user_batch_with_items(user, batch_id) -> BulkBatch:
+    """Batch + its rows in 2 queries (rows are capped by AGENT_BULK_MAX_ROWS)."""
+    return get_object_or_404(BulkBatch.objects.filter(user=user).prefetch_related("items"), pk=batch_id)
+
+
+def get_user_item(user, item_id) -> BulkItem:
+    return get_object_or_404(
+        BulkItem.objects.select_related("batch"), pk=item_id, batch__user=user, batch__is_deleted=False,
+    )
+
+
+def stale_processing_items(batch_id) -> list[BulkItem]:
+    """Rows 'processing' for longer than the worker timeout: the worker that held them died."""
+    cutoff = timezone.now() - timedelta(seconds=settings.AGENT_BULK_ITEM_TIMEOUT_SECONDS + 60)
+    return list(BulkItem.objects.filter(batch_id=batch_id, status=BulkItem.Status.PROCESSING, started_at__lt=cutoff))
+
+
+def status_counts(batch_id) -> dict:
+    return {r["status"]: r["n"] for r in BulkItem.objects.filter(batch_id=batch_id).values("status").annotate(n=Count("id"))}
+
+
+def batch_is_active(batch_id) -> bool:
+    return BulkItem.objects.filter(batch_id=batch_id, status__in=BulkItem.ACTIVE_STATUSES).exists()
+
+
+def created_action(*, run_id=None, item_id=None):
+    """The 'created' audit row proving a draft exists for this run (or any attempt of this row)."""
+    qs = AgentAction.objects.filter(result=AgentAction.Result.CREATED)
+    if run_id:
+        qs = qs.filter(run_id=run_id)
+    elif item_id:
+        qs = qs.filter(run__bulk_item_id=item_id)
+    else:
+        return None
+    return qs.order_by("id").first()
+
+
+def link_names():
+    return get_all_link_names()

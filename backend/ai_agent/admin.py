@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import AgentAction, Chat, ChatItem, ChatRun
+from .models import AgentAction, BulkBatch, BulkItem, Chat, ChatItem, ChatRun
 
 
 @admin.register(Chat)
@@ -17,7 +17,24 @@ class ChatAdmin(admin.ModelAdmin):
 class ChatRunAdmin(admin.ModelAdmin):
     list_display = ("id", "chat", "status", "created_at", "finished_at")
     list_filter = ("status",)
-    raw_id_fields = ("chat",)
+    raw_id_fields = ("chat", "bulk_item")
+
+
+@admin.register(BulkBatch)
+class BulkBatchAdmin(admin.ModelAdmin):
+    list_display = ("id", "user", "status", "link_name_label", "created_at", "is_deleted")
+    list_filter = ("status", "is_deleted")
+    raw_id_fields = ("user", "link_name")
+
+    def get_queryset(self, request):
+        return BulkBatch.all_objects.all()
+
+
+@admin.register(BulkItem)
+class BulkItemAdmin(admin.ModelAdmin):
+    list_display = ("id", "batch", "position", "status", "attempts", "bill_number")
+    list_filter = ("status",)
+    raw_id_fields = ("batch",)
 
 
 @admin.register(ChatItem)

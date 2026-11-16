@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 # Optional numbers the model fills with 0 when it means "not given" (seen live: it sent
 # discount_percent 0 AND discount_amount 0 AND gst 0 on every line, and quantity 0 on edits).
-_ZERO_MEANS_UNSET = ("discount_percent", "discount_amount", "gst", "wht")
+_ZERO_MEANS_UNSET = ("discount_percent", "discount_amount", "gst", "wht", "unit_rate")
 
 ResettableField = Literal["discount", "gst", "wht"]
 
@@ -29,6 +29,9 @@ class InvoiceLineIn(BaseModel):
     # +/- the product's rate. The sign is never changed: -2 means a Rs 2 surcharge per unit.
     discount_percent: float | None = Field(default=None, ge=-100, le=100, allow_inf_nan=False)
     discount_amount: float | None = Field(default=None, allow_inf_nan=False)
+    # "qty@rate": the price per unit the USER quoted. Code turns it into a line discount (rate list minus
+    # this) or a surcharge (if higher); the model never does that arithmetic. Not combinable with a discount.
+    unit_rate: float | None = Field(default=None, ge=0.01, allow_inf_nan=False)
     gst: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)     # percent
     wht: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)     # percent
     reset: list[ResettableField] | None = None                                    # explicit "remove this" on an existing line
@@ -54,6 +57,8 @@ class InvoiceLineIn(BaseModel):
     def _one_discount_form(self):
         if self.discount_percent is not None and self.discount_amount is not None:
             raise ValueError("Give a line discount as a percent OR as an amount per unit, not both.")
+        if self.unit_rate is not None and (self.discount_percent is not None or self.discount_amount is not None):
+            raise ValueError("A quoted rate (unit_rate) already sets the line discount; don't also give a discount.")
         if self.quantity is not None and self.quantity > settings.AGENT_INVOICE_MAX_QTY:
             raise ValueError(f"Quantity is too large (max {settings.AGENT_INVOICE_MAX_QTY}).")
         return self

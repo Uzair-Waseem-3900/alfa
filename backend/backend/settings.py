@@ -8,6 +8,11 @@ load_dotenv(BASE_DIR / '.env')
 SECRET_KEY = os.getenv("SECRET_KEY")
 # uvicorn backend.asgi:application --port 8000 --reload
 # celery -A backend worker -Q agent -l info
+# Development
+# celery -A backend worker -Q agent,agent_bulk -l info --prefetch-multiplier=1
+# Production 
+# celery -A backend worker -Q agent,agent_bulk -l info --prefetch-multiplier=1 --without-gossip --without-mingle --without-heartbeat
+
 DEBUG = os.getenv("DEBUG").lower() == "true"
 
 def env_list(name):
@@ -213,6 +218,7 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "anon": "20/minute",   # 20 requests per minute for unauthenticated users
         "user": "120/minute",  # 120 requests per minute for authenticated users
+        "agent_bulk": "60/minute",  # bulk invoices: create/answer/skip/retry (each answer re-queues one LLM run)
         "agent": "20/minute",  # ai_agent: every run costs LLM calls (ScopedRateThrottle)
     }
 }
@@ -278,7 +284,11 @@ CELERY_WORKER_POOL_RESTARTS = True
 # ai_agent runs on its OWN queue so its (slow, LLM-bound) tasks never compete
 # with other workers on the default "celery" queue, and can be scaled alone:
 #   celery -A backend worker -Q agent -l info
-CELERY_TASK_ROUTES = {"ai_agent.tasks.run_agent_task": {"queue": "agent"}}
+CELERY_TASK_ROUTES = {
+    "ai_agent.tasks.run_agent_task": {"queue": "agent"},
+    "ai_agent.tasks.run_bulk_item_task": {"queue": "agent_bulk"},
+}
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1   # one LLM-bound task at a time: a chat message never queues behind prefetched bulk rows
 
 
 # ---- ai_agent (business chat assistant) ----
@@ -297,6 +307,10 @@ AGENT_RUN_TIMEOUT_SECONDS = int(os.getenv("AGENT_RUN_TIMEOUT_SECONDS", "180"))  
 # Invoice DRAFT writes by the assistant (create / edit / discard).
 AGENT_WRITES_PER_HOUR = int(os.getenv("AGENT_WRITES_PER_HOUR", "30"))     # per user
 AGENT_WRITES_PER_RUN = int(os.getenv("AGENT_WRITES_PER_RUN", "10"))       # per question (one model turn can emit many parallel calls)
+AGENT_BULK_WRITES_PER_HOUR = int(os.getenv("AGENT_BULK_WRITES_PER_HOUR", "300"))   # per user, bulk invoices only
+AGENT_BULK_MAX_ROWS = int(os.getenv("AGENT_BULK_MAX_ROWS", "100"))                # invoices per batch
+AGENT_BULK_MAX_ATTEMPTS = int(os.getenv("AGENT_BULK_MAX_ATTEMPTS", "10"))         # answer-and-retry rounds per row
+AGENT_BULK_ITEM_TIMEOUT_SECONDS = int(os.getenv("AGENT_BULK_ITEM_TIMEOUT_SECONDS", "120"))
 AGENT_INVOICE_MAX_LINES = int(os.getenv("AGENT_INVOICE_MAX_LINES", "30"))
 AGENT_INVOICE_MAX_QTY = int(os.getenv("AGENT_INVOICE_MAX_QTY", "100000"))
 # Event stream (Redis Streams) — same Redis server as Celery, separate DB index

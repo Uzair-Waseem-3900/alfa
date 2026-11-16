@@ -29,7 +29,7 @@ class InvoiceToolTests(InvoiceWorld, TransactionTestCase):
     def call(self, name, args, *, user=None, run=None):
         run = run or self.run
         ctx = ToolContext(
-            context=AgentContext(user=user or self.admin, run_id=str(run.id), chat_id=str(self.chat.id)),
+            context=self.agent_context(run, user=user),
             tool_name=name, tool_call_id="call_1", tool_arguments=json.dumps(args),
         )
         return asyncio.run(self.tools[name].on_invoke_tool(ctx, json.dumps(args)))
@@ -131,5 +131,6 @@ class InvoiceToolTests(InvoiceWorld, TransactionTestCase):
         self.assertEqual(many["match"], "multiple")
         self.assertNotIn("stock_available_for_new_drafts", many["candidates"][0])            # stock only for a unique match
         self.assertEqual((one["match"], one["product"]["stock_available_for_new_drafts"]), ("unique", 50))
-        self.assertEqual(multiple_queries, 1)                                                # was 1 + 3 per candidate
-        self.assertLessEqual(unique_queries, 3)                                              # product(+price) + stock + reserved
+        seeding = 2                          # the test helper reads the customer/product ids it pretends the model looked up
+        self.assertEqual(multiple_queries, 1 + seeding)                                      # was 1 + 3 per candidate
+        self.assertLessEqual(unique_queries, 3 + seeding)                                    # product(+price) + stock + reserved

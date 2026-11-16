@@ -161,11 +161,20 @@ class BulkBatchListCreateView(_BulkThrottled, generics.ListCreateAPIView):
         return Response(BulkBatchDetailSerializer(batch).data, status=status.HTTP_201_CREATED)
 
 
-class BulkBatchDetailView(generics.RetrieveDestroyAPIView):
+class BulkBatchDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET /api/agent/bulk/batches/<id>/ — the batch and every row (the page's source of truth).
+       PATCH {title} — rename it.
        DELETE — soft delete (not while rows are still working)."""
     permission_classes = [IsAdminOrSuperuser]
     serializer_class = BulkBatchDetailSerializer
+    http_method_names = ["get", "patch", "delete", "head", "options"]
+
+    def partial_update(self, request, *args, **kwargs):
+        batch = bulk_sel.get_user_batch(request.user, self.kwargs["batch_id"])
+        ser = ChatTitleSerializer(data=request.data)          # same rule as a chat title: 1-120 chars, not blank
+        ser.is_valid(raise_exception=True)
+        bulk_service.rename_batch(batch=batch, title=ser.validated_data["title"])
+        return Response(BulkBatchDetailSerializer(bulk_sel.get_user_batch_with_items(request.user, batch.id)).data)
 
     def get_object(self):
         batch = bulk_sel.get_user_batch(self.request.user, self.kwargs["batch_id"])

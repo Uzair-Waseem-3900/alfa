@@ -29,6 +29,7 @@ export const bulkApi = {
         api.post('/agent/bulk/batches/', { prompts, link_name_id: linkNameId || null }),
     getBatch: (id) => api.get(`/agent/bulk/batches/${id}/`),
     deleteBatch: (id) => api.delete(`/agent/bulk/batches/${id}/`),
+    renameBatch: (id, title) => api.patch(`/agent/bulk/batches/${id}/`, { title }),
     cancelBatch: (id) => api.post(`/agent/bulk/batches/${id}/cancel/`, {}),
     answer: (itemId, answer) => api.post(`/agent/bulk/items/${itemId}/answer/`, { answer }),
     skip: (itemId) => api.post(`/agent/bulk/items/${itemId}/skip/`, {}),

@@ -167,6 +167,12 @@ def cancel_batch(*, batch: BulkBatch) -> BulkBatch:
     return batch
 
 
+def rename_batch(*, batch: BulkBatch, title: str) -> BulkBatch:
+    batch.title = title
+    batch.save(update_fields=["title", "updated_at"])
+    return batch
+
+
 def delete_batch(*, batch: BulkBatch) -> None:
     if sel.batch_is_active(batch.pk):
         raise ValidationError({"detail": "This batch is still working. Cancel it first."})

@@ -94,7 +94,7 @@ class BulkBatchSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BulkBatch
-        fields = ["id", "status", "link_name_label", "created_at", "updated_at", "total", "done", "attention", "failed", "working"]
+        fields = ["id", "title", "status", "link_name_label", "created_at", "updated_at", "total", "done", "attention", "failed", "working"]
         read_only_fields = fields
 
 
@@ -103,7 +103,7 @@ class BulkBatchDetailSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = BulkBatch
-        fields = ["id", "status", "link_name_label", "created_at", "updated_at", "items"]
+        fields = ["id", "title", "status", "link_name_label", "created_at", "updated_at", "items"]
         read_only_fields = fields
 
 

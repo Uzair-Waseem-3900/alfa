@@ -238,6 +238,7 @@ class BulkBatch(models.Model):
     # Optional: customers are searched ONLY under this sales-man link name (the middle part of the customer code).
     link_name = models.ForeignKey("sales_man.SalesManLinkName", null=True, blank=True, on_delete=models.SET_NULL, related_name="+")
     link_name_label = models.CharField(max_length=50, blank=True, default="")   # "FSD", kept even if the link name is removed later
+    title = models.CharField(max_length=120, blank=True, default="")             # optional name the user gave it (rename)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
 
     created_at = models.DateTimeField(auto_now_add=True)

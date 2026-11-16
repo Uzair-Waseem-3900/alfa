@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { format } from 'date-fns';
-import { ArrowLeft, Loader2, PanelLeft, Plus, Square, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Loader2, PanelLeft, Plus, Square, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { bulkApi } from '../../services/agentApi';
 import { useBulkBatch, useBulkBatches, useLinkNames } from '../../hooks/useBulkInvoices';
 import { extractErrorMessage } from '../../utils/errorMessage';
+import BulkBatchItem from '../../components/agent/BulkBatchItem';
+import { defaultBatchLabel } from '../../utils/bulkBatch';
 import BulkCompose from '../../components/agent/BulkCompose';
 import BulkRow, { StatusChip } from '../../components/agent/BulkRow';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
@@ -14,7 +15,6 @@ import InlineAlert from '../../components/ui/InlineAlert';
 
 const SIDEBAR_POLL_MS = 4000;
 const BATCH_STATUS_CHIP = { active: 'processing', waiting: 'needs_attention', finished: 'done', cancelled: 'cancelled' };
-const when = (iso) => format(new Date(iso), 'd MMM, h:mm a');
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
 // The sidebar's counts come from the list API (loaded once). For the batch that is open, use the live rows instead,
@@ -104,6 +104,18 @@ const BulkInvoicesPage = () => {
         }
     };
 
+    const renameBatch = async (id, title) => {
+        try {
+            await bulkApi.renameBatch(id, title);
+            batches.refreshSilently();
+            if (id === batchId) view.reload({ silent: true });
+            return true;
+        } catch (err) {
+            toast.error(extractErrorMessage(err, 'Could not rename the batch'));
+            return false;
+        }
+    };
+
     const goto = (path) => { navigate(path); setSidebarOpen(false); };
     const batch = view.batch;
     const counts = batch ? batch.items.reduce((acc, r) => ({ ...acc, [r.status]: (acc[r.status] || 0) + 1 }), {}) : {};
@@ -140,21 +152,8 @@ const BulkInvoicesPage = () => {
                             {batches.items.map((listed) => {
                                 const b = listed.id === batchId && view.batch ? { ...listed, ...liveCounts(view.batch.items) } : listed;
                                 return (
-                                <li key={b.id} className={`group flex items-center rounded-lg ${b.id === batchId ? 'bg-primary-100/70' : 'hover:bg-neutral-100'}`}>
-                                    <button type="button" onClick={() => goto(`/agent/bulk/${b.id}`)} aria-current={b.id === batchId ? 'page' : undefined}
-                                        className="flex-1 min-w-0 text-left px-3 py-2 min-h-[56px] cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
-                                        <span className="block truncate text-sm font-medium text-neutral-800">
-                                            {plural(b.total, 'invoice')}{b.link_name_label ? ` · ${b.link_name_label}` : ''}
-                                        </span>
-                                        <span className="block truncate text-xs text-neutral-500">
-                                            {when(b.created_at)} · {b.done}/{b.total} done{b.attention ? ` · ${b.attention} need you` : ''}{b.working ? ' · working' : ''}
-                                        </span>
-                                    </button>
-                                    <button type="button" onClick={() => setToDelete(b)} disabled={b.working > 0} aria-label={`Remove batch from ${when(b.created_at)}`}
-                                        className="w-11 h-11 flex items-center justify-center rounded-lg text-neutral-400 hover:text-error-600 hover:bg-neutral-200/70 cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed">
-                                        <Trash2 className="w-4 h-4" />
-                                    </button>
-                                </li>
+                                    <BulkBatchItem key={b.id} batch={b} active={b.id === batchId}
+                                        onSelect={(id) => goto(`/agent/bulk/${id}`)} onRename={renameBatch} onAskDelete={setToDelete} />
                                 );
                             })}
                             {batches.hasMore && (
@@ -199,6 +198,7 @@ const BulkInvoicesPage = () => {
                 ) : batch && (
                     <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
                         <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+                            {batch.title && <h2 className="text-lg font-semibold text-neutral-900 break-words">{batch.title}</h2>}
                             <div className="flex flex-wrap items-center gap-3">
                                 <StatusChip status={BATCH_STATUS_CHIP[batch.status] || 'queued'} />
                                 <p className="flex-1 min-w-0 text-sm text-neutral-600">
@@ -237,7 +237,7 @@ const BulkInvoicesPage = () => {
                 isOpen={!!toDelete}
                 onClose={() => !deleting && setToDelete(null)}
                 onConfirm={confirmDelete}
-                title="Remove this batch?"
+                title={toDelete ? `Remove "${toDelete.title || defaultBatchLabel(toDelete)}"?` : "Remove this batch?"}
                 message="It disappears from your history. Draft invoices already created are not deleted."
                 confirmText="Remove"
                 loading={deleting}

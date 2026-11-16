@@ -78,11 +78,11 @@ Retry after a write no longer duplicates (runner stops retrying once a run wrote
 
 ## Bulk invoices: audit items left for the owner / v2
 Found by the independent audit of the bulk feature (the rest were fixed: one draft per bulk row, lost queued tasks re-queued, skip never hides a draft, batch status under a row lock, Redis blip at row start, cancelled-batch answers refused, `unit_rate` floor and note, one active run per row, stream MAXLEN, admin).
-- **E1 (decision):** in bulk, ids from a `match: multiple` lookup still unlock a write (the model may pick one with nobody to ask). Recommended: bulk records only `unique` ids; multiples force `needs_attention`.
-- **E2 (decision):** a single PARTIAL name match counts as unique (e.g. "Ali" -> only "Alizeh Traders" inside the chosen link name). Recommended for bulk: accept only an exact name/code match, otherwise ask with that candidate as the option.
-- **E3 (decision):** a double-submitted batch (double click / retry after a timeout) creates two batches and two drafts per row. Options: client idempotency key, or refuse an identical prompt set from the same user within a few minutes.
-- **E4 (decision):** no cap on queued rows per user (60 creates/min x 100 rows). Suggest refusing a new batch while the user already has more than N active rows.
-- **E5 (decision):** `qty@0` is treated as "rate not given" (list price), so a "free" line is priced at list. Decide whether `@0` should mean free or be a question.
+- ~~E1~~ DONE: in bulk only a unique lookup unlocks a write.
+- ~~E2~~ DECIDED: partial name allowed; link name, then address, narrow it; ask only if still several (an address matching nobody no longer hides a name match).
+- ~~E3~~ DONE in the frontend (ref guard on Start); no server-side idempotency key (owner decision).
+- ~~E4~~ DONE: `AGENT_BULK_MAX_ACTIVE_ROWS` = 200 queued+processing rows per user, readable 400 shown in the UI.
+- ~~E5~~ DECIDED: `qty@0` = use the rate list price.
 - E6: a Gemini 429 ends the row at once (no backoff) and spends an attempt.
 - E7: API-side transitions (answer/skip/retry/cancel) publish no SSE event, so a second open tab stays stale until it reloads.
 - E8: no retention for `ChatRun` / `AgentAction` rows of bulk attempts; the batch detail GET returns every prompt (<= 100 x 2,000 chars) on each poll.

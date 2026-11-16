@@ -309,6 +309,7 @@ AGENT_WRITES_PER_HOUR = int(os.getenv("AGENT_WRITES_PER_HOUR", "30"))     # per 
 AGENT_WRITES_PER_RUN = int(os.getenv("AGENT_WRITES_PER_RUN", "10"))       # per question (one model turn can emit many parallel calls)
 AGENT_BULK_WRITES_PER_HOUR = int(os.getenv("AGENT_BULK_WRITES_PER_HOUR", "300"))   # per user, bulk invoices only
 AGENT_BULK_MAX_ROWS = int(os.getenv("AGENT_BULK_MAX_ROWS", "100"))                # invoices per batch
+AGENT_BULK_MAX_ACTIVE_ROWS = int(os.getenv("AGENT_BULK_MAX_ACTIVE_ROWS", "200"))     # queued+processing rows per user
 AGENT_BULK_MAX_ATTEMPTS = int(os.getenv("AGENT_BULK_MAX_ATTEMPTS", "10"))         # answer-and-retry rounds per row
 AGENT_BULK_ITEM_TIMEOUT_SECONDS = int(os.getenv("AGENT_BULK_ITEM_TIMEOUT_SECONDS", "120"))
 AGENT_INVOICE_MAX_LINES = int(os.getenv("AGENT_INVOICE_MAX_LINES", "30"))

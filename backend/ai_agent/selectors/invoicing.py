@@ -40,9 +40,14 @@ def find_customers(*, search: str | None, code: str | None, area: str | None = N
     qs = get_all_customers(code=code) if code else get_all_customers(name=search)
     if link_name_id:
         qs = qs.filter(sales_man_link_name_id=link_name_id)
+    candidates = None
     if area and area.strip():
-        qs = qs.filter(search_q(area, "address"))
-    candidates = list(qs[: LOOKUP_LIMIT + 1])
+        narrowed = list(qs.filter(search_q(area, "address"))[: LOOKUP_LIMIT + 1])
+        if narrowed:                   # the address helped: use it
+            candidates = narrowed
+        # else: the (optional) address matched nobody -> keep every name match; several of them become a question
+    if candidates is None:
+        candidates = list(qs[: LOOKUP_LIMIT + 1])
     unique, _ = _resolve(candidates, name_of=lambda c: c.name, code_of=lambda c: c.code, search=search, code=code)
     return unique, candidates
 

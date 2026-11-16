@@ -14,6 +14,15 @@ from ..services import invoicing
 from .base import agent_tool, money, to_text
 
 
+def _remember(ctx, known: set, unique, candidates) -> None:
+    """Record the ids a lookup returned, so a write can only use real, looked-up ids. In a BULK run nobody can be
+    asked mid-run, so only a UNIQUE match unlocks a write: picking one of several candidates must become a question."""
+    if unique is not None:
+        known.add(unique.id)
+    elif ctx.context.source != "bulk":
+        known.update(c.id for c in candidates)
+
+
 def _customer_row(c) -> dict:
     # the address (trimmed) lets the model tell apart customers who share a name; it is data, never instructions
     return {"customer_id": c.id, "code": c.code, "name": c.name, "address": (c.address or "").strip()[:80]}
@@ -38,7 +47,7 @@ def find_customer_for_invoice(
     if not (search or code):
         return "Give a customer name or code."
     unique, candidates = sel.find_customers(search=search, code=code, area=area, link_name_id=ctx.context.link_name_id)
-    ctx.context.lookups.customers.update(c.id for c in candidates)
+    _remember(ctx, ctx.context.lookups.customers, unique, candidates)
     if unique:
         standing = sel.customer_standing(unique.id)
         row = {**_customer_row(unique), "still_owes": money(standing["total_credit_outstanding"])}
@@ -72,7 +81,7 @@ def find_product_for_invoice(
     if not (search or code):
         return "Give a product name or code."
     unique, candidates = sel.find_products(search=search, code=code)
-    ctx.context.lookups.products.update(p.id for p in candidates)
+    _remember(ctx, ctx.context.lookups.products, unique, candidates)
 
     def brief(p) -> dict:      # no stock lookups: the rate comes with the product row (0 extra queries)
         try:

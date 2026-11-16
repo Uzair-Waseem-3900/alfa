@@ -34,6 +34,14 @@ MSG_ATTEMPTS = "Too many tries for this row. Please create this invoice yourself
 
 def create_batch(*, user, prompts: list[str], link_name_id: int | None) -> BulkBatch:
     """Create the batch + its rows, then queue one task per row, in order."""
+    waiting = sel.count_active_rows(user)
+    if waiting + len(prompts) > settings.AGENT_BULK_MAX_ACTIVE_ROWS:
+        room = max(settings.AGENT_BULK_MAX_ACTIVE_ROWS - waiting, 0)
+        raise ValidationError({"detail": (
+            f"You already have {waiting} invoice{'s' if waiting != 1 else ''} waiting or being created, and the limit is "
+            f"{settings.AGENT_BULK_MAX_ACTIVE_ROWS} at a time. "
+            + (f"You can add up to {room} more now." if room else "Wait for some to finish (or stop the running batch), then try again.")
+        )})
     link = None
     if link_name_id:
         try:

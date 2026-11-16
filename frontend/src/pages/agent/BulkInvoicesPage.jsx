@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import { ArrowLeft, Loader2, PanelLeft, Plus, Square, Trash2, X } from 'lucide-react';
@@ -16,6 +16,15 @@ const BATCH_STATUS_CHIP = { active: 'processing', waiting: 'needs_attention', fi
 const when = (iso) => format(new Date(iso), 'd MMM, h:mm a');
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
+// The sidebar's counts come from the list API (loaded once). For the batch that is open, use the live rows instead,
+// so "0/2" turns into "2/2" as each invoice finishes.
+const liveCounts = (items) => items.reduce((acc, r) => ({
+    total: acc.total + 1,
+    done: acc.done + (r.status === 'done' ? 1 : 0),
+    attention: acc.attention + (r.status === 'needs_attention' ? 1 : 0),
+    working: acc.working + (r.status === 'queued' || r.status === 'processing' ? 1 : 0),
+}), { total: 0, done: 0, attention: 0, working: 0 });
+
 // Bulk invoice creation: many prompts, one DRAFT invoice each, worked one after another on the server.
 //   /agent/bulk            -> add prompts and start
 //   /agent/bulk/:batchId   -> live progress, answer the agent's questions
@@ -30,23 +39,42 @@ const BulkInvoicesPage = () => {
     const linkNames = useLinkNames();
     const view = useBulkBatch(batchId);
 
+    // When the open batch settles (stops working), re-read the list quietly so its sidebar numbers are the stored ones.
+    const batchStatus = view.batch?.status;
+    const lastStatus = useRef(batchStatus);
+    const { refreshSilently } = batches;
+    useEffect(() => {
+        if (lastStatus.current === 'active' && batchStatus && batchStatus !== 'active') refreshSilently();
+        lastStatus.current = batchStatus;
+    }, [batchStatus, refreshSilently]);
+
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [starting, setStarting] = useState(false);
+    const [startError, setStartError] = useState(null);
     const [toDelete, setToDelete] = useState(null);
     const [deleting, setDeleting] = useState(false);
 
     // Same inline role check every admin page uses.
     if (user && user.role !== 'admin' && user.role !== 'superuser') return <Navigate to="/dashboard" replace />;
 
+    // The ref (not the state) blocks a double click: two clicks can land before React re-renders the disabled button,
+    // and each accepted call would create a whole batch of drafts.
+    const startingRef = useRef(false);
     const start = async ({ prompts, linkNameId }) => {
+        if (startingRef.current) return;
+        startingRef.current = true;
         setStarting(true);
+        setStartError(null);
         try {
             const batch = await bulkApi.createBatch({ prompts, linkNameId });
             batches.refresh();
             navigate(`/agent/bulk/${batch.id}`);
         } catch (err) {
-            toast.error(extractErrorMessage(err, 'Could not start the batch'));
+            const message = extractErrorMessage(err, 'Could not start the batch');
+            setStartError(message);          // stays visible next to the Start button (limits, validation)
+            toast.error(message);
         } finally {
+            startingRef.current = false;
             setStarting(false);
         }
     };
@@ -99,7 +127,9 @@ const BulkInvoicesPage = () => {
                         <p className="px-4 py-10 text-center text-sm text-neutral-500">No bulk invoices yet.</p>
                     ) : (
                         <ul className="space-y-0.5">
-                            {batches.items.map((b) => (
+                            {batches.items.map((listed) => {
+                                const b = listed.id === batchId && view.batch ? { ...listed, ...liveCounts(view.batch.items) } : listed;
+                                return (
                                 <li key={b.id} className={`group flex items-center rounded-lg ${b.id === batchId ? 'bg-primary-100/70' : 'hover:bg-neutral-100'}`}>
                                     <button type="button" onClick={() => goto(`/agent/bulk/${b.id}`)} aria-current={b.id === batchId ? 'page' : undefined}
                                         className="flex-1 min-w-0 text-left px-3 py-2 min-h-[56px] cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
@@ -115,7 +145,8 @@ const BulkInvoicesPage = () => {
                                         <Trash2 className="w-4 h-4" />
                                     </button>
                                 </li>
-                            ))}
+                                );
+                            })}
                             {batches.hasMore && (
                                 <li>
                                     <button type="button" onClick={batches.loadMore} disabled={batches.loadingMore}
@@ -148,7 +179,7 @@ const BulkInvoicesPage = () => {
                 </header>
 
                 {!batchId ? (
-                    <BulkCompose linkNames={linkNames} starting={starting} onStart={start} />
+                    <BulkCompose linkNames={linkNames} starting={starting} error={startError} onStart={start} />
                 ) : view.loading && !batch ? (
                     <div className="max-w-3xl w-full mx-auto px-4 py-8 space-y-3" aria-hidden="true">
                         {[1, 2, 3].map((n) => <div key={n} className="h-24 rounded-2xl bg-neutral-100 animate-pulse motion-reduce:animate-none" />)}

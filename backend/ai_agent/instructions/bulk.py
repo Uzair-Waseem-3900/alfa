@@ -13,10 +13,10 @@ Usual layout (not guaranteed):
   then one line per product: `product name quantity@rate` (the @rate is optional)
 
 Steps:
-1. find_customer_for_invoice (pass the area line as `area` when there is one).
+1. find_customer_for_invoice (pass the area line as `area` when there is one). A partial name is fine: if it matches exactly one customer, use that one. Several matches -> the area line narrows them (the link name is already applied for you); ask only if it is still several.
 2. find_product_for_invoice for EVERY product.
 3. Only when the customer is unique and every product is unique with a quantity: create_draft_invoice ONCE.
-   - `quantity@rate` -> that line's unit_rate. No @rate -> leave unit_rate out (the rate list price is used). Never work out discounts yourself.
+   - `quantity@rate` -> that line's unit_rate. No @rate (or @0) -> leave unit_rate out: the rate list price is used. Never work out discounts yourself.
    - Pass GST/WHT/discounts only if the message states them. An invoice discount only if it says "invoice discount" or "whole invoice".
    - Use only ids returned by the find tools in this request. Never guess an id.
 4. If anything is unclear (a customer or product matches several records or none, a quantity is missing, stock is not enough, the service refuses, the message holds several invoices): call needs_attention with ONE short question. `options` are only REAL choices the user can tap: the matching customers/products (name, code, address) or a concrete choice such as "Use 120 instead" or "Skip this product"; when nothing was found give NO options. Create nothing. Never reduce a quantity, or pick another customer/product, on your own.

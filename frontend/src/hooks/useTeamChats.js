@@ -50,7 +50,19 @@ export const usePagedList = (fetchPage, key, errorText) => {
     }, [key, loadingMore, page, totalPages]);
 
     const refresh = useCallback(() => setVersion((v) => v + 1), []);
-    return { items, loading, loadingMore, error, hasMore: page > 0 && page < totalPages, loadMore, refresh };
+    // Re-read page 1 in place (no skeleton, later pages kept): used when something on the list changed in the background.
+    const refreshSilently = useCallback(async () => {
+        if (!fetchPage) return;
+        try {
+            const res = await fetchPage(1);
+            setItems((prev) => {
+                const fresh = new Set(res.results.map((r) => r.id ?? r.email));
+                return [...res.results, ...prev.filter((r) => !fresh.has(r.id ?? r.email))];
+            });
+        } catch { /* keep what is shown */ }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [key]);
+    return { items, loading, loadingMore, error, hasMore: page > 0 && page < totalPages, loadMore, refresh, refreshSilently };
 };
 
 export const useTeamOwners = () =>

@@ -52,6 +52,13 @@ def status_counts(batch_id) -> dict:
     return {r["status"]: r["n"] for r in BulkItem.objects.filter(batch_id=batch_id).values("status").annotate(n=Count("id"))}
 
 
+def count_active_rows(user) -> int:
+    """Rows of this user still queued/processing. Only the user's ACTIVE batches are looked at
+    (idx_bulkbatch_user_created, then idx_bulkitem_batch_status), never the whole history."""
+    active_batches = BulkBatch.objects.filter(user=user, status=BulkBatch.Status.ACTIVE).values("id")
+    return BulkItem.objects.filter(batch_id__in=active_batches, status__in=BulkItem.ACTIVE_STATUSES).count()
+
+
 def batch_is_active(batch_id) -> bool:
     return BulkItem.objects.filter(batch_id=batch_id, status__in=BulkItem.ACTIVE_STATUSES).exists()
 

@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import { ListPlus, Loader2, Play, X } from 'lucide-react';
+import InlineAlert from '../ui/InlineAlert';
 
 const MAX_CHARS = 2000;
 const MAX_ROWS = 100;
 const EXAMPLE = 'Uzair Waseem\nSatiana Road\nMAX BLUE 10@228\nMAX RED 5';
 
-const BulkCompose = ({ linkNames, starting, onStart }) => {
+const BulkCompose = ({ linkNames, starting, error, onStart }) => {
     const [drafts, setDrafts] = useState([]);
     const [text, setText] = useState('');
     const [linkId, setLinkId] = useState('');
@@ -79,7 +80,12 @@ const BulkCompose = ({ linkNames, starting, onStart }) => {
                             <ListPlus className="w-4 h-4" aria-hidden="true" /> Add
                         </button>
                     </div>
-                    <p className="text-xs text-neutral-500">Enter adds a new line. Press Add (or Ctrl+Enter) to put it in the list. Up to {MAX_ROWS} invoices.</p>
+                    {full ? (
+                        <p className="text-xs font-medium text-warning-700">You added the maximum of {MAX_ROWS} invoices for one batch. Start this batch, then create another.</p>
+                    ) : (
+                        <p className="text-xs text-neutral-500">Enter adds a new line. Press Add (or Ctrl+Enter) to put it in the list. Up to {MAX_ROWS} invoices per batch.</p>
+                    )}
+                    {error && <InlineAlert message={error} />}
 
                     <button type="button" disabled={drafts.length === 0 || starting}
                         onClick={() => onStart({ prompts: drafts, linkNameId: linkId ? Number(linkId) : null })}
@@ -96,6 +102,7 @@ const BulkCompose = ({ linkNames, starting, onStart }) => {
 BulkCompose.propTypes = {
     linkNames: PropTypes.array.isRequired,
     starting: PropTypes.bool,
+    error: PropTypes.string,
     onStart: PropTypes.func.isRequired,
 };
 

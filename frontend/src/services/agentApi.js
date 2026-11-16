@@ -13,6 +13,14 @@ export const agentApi = {
     sendMessage: (id, content) => api.post(`/agent/chats/${id}/messages/`, { content }),
 };
 
+// Superuser-only, READ-ONLY view of every user's chats.
+export const teamApi = {
+    listOwners: (params = {}) => api.get('/agent/team/users/', { params }),
+    listChats: (email, params = {}) => api.get(`/agent/team/users/${encodeURIComponent(email)}/chats/`, { params }),
+    getChat: (id) => api.get(`/agent/team/chats/${id}/`),
+    getMessages: (id, params = {}) => api.get(`/agent/team/chats/${id}/messages/`, { params }),
+};
+
 class AuthExpiredError extends Error {}
 class FatalStreamError extends Error {}
 class RetriableStreamError extends Error {}

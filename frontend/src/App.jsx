@@ -169,6 +169,7 @@ import LoadingSpinner from './components/ui/LoadingSpinner';
 
 // Lazy: pulls in the markdown renderer + SSE client, which no other page needs.
 const AgentPage = lazy(() => import('./pages/agent/AgentPage'));
+const TeamChatsPage = lazy(() => import('./pages/agent/TeamChatsPage'));
 
 import './App.css';
 
@@ -1199,6 +1200,16 @@ const AppContent = () => {
             "Back to software"), so deliberately NOT wrapped in <Layout>.
             One route with an optional :chatId so selecting/creating a chat
             never remounts the page. */}
+        {/* Superuser-only read-only view of every user's chats (static "team"
+            outranks the :chatId param above). */}
+        <Route path="/agent/team/:email?/:chatId?" element={
+          <ProtectedRoute>
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>
+              <TeamChatsPage />
+            </Suspense>
+          </ProtectedRoute>
+        } />
+
         <Route path="/agent/:chatId?" element={
           <ProtectedRoute>
             <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>

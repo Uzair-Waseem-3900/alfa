@@ -9,10 +9,14 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import AuthenticationFailed, InvalidToken
 
 from .models import ChatRun
-from .permissions import IsAdminOrSuperuser
-from .selectors import get_user_chat, get_user_chats, get_user_run, get_visible_messages
+from .permissions import IsAdminOrSuperuser, IsSuperuser
+from .selectors import (
+    get_any_chat, get_chat_owners, get_chats_of_owner, get_user_chat, get_user_chats, get_user_run,
+    get_visible_messages,
+)
 from .serializers import (
-    ChatSerializer, ChatTitleSerializer, MessageSerializer, SendMessageSerializer,
+    ChatOwnerSerializer, ChatSerializer, ChatTitleSerializer, MessageSerializer, SendMessageSerializer,
+    TeamChatSerializer,
 )
 from .services import chats as chat_service
 from .services import runs as run_service
@@ -72,6 +76,47 @@ class ChatMessagesView(generics.ListCreateAPIView):
         ser.is_valid(raise_exception=True)
         run = run_service.start_run(chat=chat, content=ser.validated_data["content"])
         return Response({"run_id": str(run.id)}, status=status.HTTP_202_ACCEPTED)
+
+
+# ---------------------------------------------------------------------------
+# Team chats — superusers may READ any user's chats (themselves included).
+# GET only: no sending, renaming or deleting someone else's chat.
+# ---------------------------------------------------------------------------
+
+class TeamOwnersView(generics.ListAPIView):
+    """GET /api/agent/team/users/ — users who have chats (paginated, most recently active first)."""
+    permission_classes = [IsSuperuser]
+    serializer_class = ChatOwnerSerializer
+
+    def get_queryset(self):
+        return get_chat_owners()
+
+
+class TeamUserChatsView(generics.ListAPIView):
+    """GET /api/agent/team/users/<email>/chats/ — that user's chats, newest first (paginated)."""
+    permission_classes = [IsSuperuser]
+    serializer_class = TeamChatSerializer
+
+    def get_queryset(self):
+        return get_chats_of_owner(self.kwargs["email"])
+
+
+class TeamChatDetailView(generics.RetrieveAPIView):
+    """GET /api/agent/team/chats/<id>/ — one chat with its owner."""
+    permission_classes = [IsSuperuser]
+    serializer_class = TeamChatSerializer
+
+    def get_object(self):
+        return get_any_chat(self.kwargs["chat_id"])
+
+
+class TeamChatMessagesView(generics.ListAPIView):
+    """GET /api/agent/team/chats/<id>/messages/ — history, newest first (paginated). Text only."""
+    permission_classes = [IsSuperuser]
+    serializer_class = MessageSerializer
+
+    def get_queryset(self):
+        return get_visible_messages(get_any_chat(self.kwargs["chat_id"]))
 
 
 # ---------------------------------------------------------------------------

@@ -93,6 +93,7 @@ const AgentPage = () => {
                 onSelect={handleSelect}
                 onRename={chatList.renameChat}
                 onDelete={handleDelete}
+                onTeamChats={user?.role === 'superuser' ? () => navigate('/agent/team') : undefined}
             />
 
             <div className="flex flex-1 min-w-0 flex-col">

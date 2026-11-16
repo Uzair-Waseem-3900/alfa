@@ -12,6 +12,7 @@ import BulkRow, { StatusChip } from '../../components/agent/BulkRow';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import InlineAlert from '../../components/ui/InlineAlert';
 
+const SIDEBAR_POLL_MS = 4000;
 const BATCH_STATUS_CHIP = { active: 'processing', waiting: 'needs_attention', finished: 'done', cancelled: 'cancelled' };
 const when = (iso) => format(new Date(iso), 'd MMM, h:mm a');
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
@@ -48,6 +49,16 @@ const BulkInvoicesPage = () => {
         lastStatus.current = batchStatus;
     }, [batchStatus, refreshSilently]);
 
+    const startingRef = useRef(false);
+    // Whatever the live events do, the sidebar re-reads its numbers from the server every few seconds while any
+    // listed batch is still working (one grouped query), so it always ends up matching the database.
+    const anyWorking = batches.items.some((b) => b.working > 0) || view.batch?.status === 'active';
+    useEffect(() => {
+        if (!anyWorking) return undefined;
+        const timer = setInterval(refreshSilently, SIDEBAR_POLL_MS);
+        return () => clearInterval(timer);
+    }, [anyWorking, refreshSilently]);
+
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [starting, setStarting] = useState(false);
     const [startError, setStartError] = useState(null);
@@ -59,7 +70,6 @@ const BulkInvoicesPage = () => {
 
     // The ref (not the state) blocks a double click: two clicks can land before React re-renders the disabled button,
     // and each accepted call would create a whole batch of drafts.
-    const startingRef = useRef(false);
     const start = async ({ prompts, linkNameId }) => {
         if (startingRef.current) return;
         startingRef.current = true;

@@ -103,7 +103,7 @@ const MessageList = ({
                         )}
                         {messages.map((m) => (
                             <MessageBubble
-                                key={m.id}
+                                key={m.key ?? m.id}
                                 message={m}
                                 assistantName={assistantName}
                                 instant={!isLive(m.id)}

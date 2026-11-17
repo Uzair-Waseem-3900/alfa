@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { SPRING_POP } from '../../utils/motion';
@@ -52,42 +53,86 @@ const DoneTick = () => (
     </span>
 );
 
-const ToolSteps = ({ steps }) => {
+const HEIGHT = { duration: 0.38, ease: [0.22, 1, 0.36, 1] };
+
+// While the assistant works the pills are live. When the answer is finished they fold into one quiet row
+// ("Used 3 steps", tap to expand) with a smooth height animation, so the text below glides instead of jumping.
+const ToolSteps = ({ steps, finished = false }) => {
+    const [open, setOpen] = useState(false);
     if (!steps?.length) return null;
 
+    const showPills = !finished || open;
+    const n = steps.length;
+
     return (
-        <ul className="flex flex-wrap gap-2 mb-3" aria-label="Assistant activity">
+        // The whole block grows in (height + fade) the first time a step appears, so the text it pushes down glides.
+        <motion.div className="mb-3" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} transition={HEIGHT}
+            style={{ overflow: 'hidden' }}>
             <AnimatePresence initial={false}>
-                {steps.map((step) => (
-                    <motion.li
-                        key={step.id}
-                        variants={chipVariants}
-                        initial="hidden"
-                        animate="show"
-                        exit="exit"
-                        layout
-                        className={`rounded-full ${
-                            step.done
-                                ? 'p-px bg-neutral-200'
-                                : 'p-px bg-gradient-to-r from-accent-200 via-accent-500 to-accent-200 agent-sheen-border agent-breathe'
-                        }`}
-                    >
-                        <span className={`flex items-center gap-2 rounded-full bg-white py-1 pl-2.5 pr-3 text-xs font-medium ${
-                            step.done ? 'text-neutral-500' : ''
-                        }`}>
-                            {step.done ? <DoneTick /> : <RunningDot />}
-                            <span className={step.done ? '' : 'agent-sheen-text bg-gradient-to-r from-neutral-500 via-accent-600 to-neutral-500'}>
-                                {step.label}
-                            </span>
+                {finished && (
+                    <motion.button key="summary" type="button" onClick={() => setOpen((o) => !o)}
+                        aria-expanded={open}
+                        initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                        transition={{ duration: 0.25, delay: 0.1 }}
+                        whileTap={{ scale: 0.97 }}
+                        className="group inline-flex items-center gap-2 rounded-full border border-neutral-200 bg-neutral-50 py-1 pl-2.5 pr-2 mb-2 text-xs font-medium text-neutral-600 hover:bg-neutral-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                        <span className="flex h-4 w-4 items-center justify-center rounded-full bg-success-50 text-success-600" aria-hidden="true">
+                            <svg viewBox="0 0 16 16" className="h-3 w-3" fill="none">
+                                <path d="M3.5 8.5l3 3 6-7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
                         </span>
-                    </motion.li>
-                ))}
+                        Used {n} step{n === 1 ? '' : 's'}
+                        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ type: 'spring', stiffness: 400, damping: 26 }}
+                            className="inline-flex text-neutral-400 group-hover:text-neutral-600" aria-hidden="true">
+                            <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" fill="none">
+                                <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                        </motion.span>
+                    </motion.button>
+                )}
             </AnimatePresence>
-        </ul>
+
+            <AnimatePresence initial={false}>
+                {showPills && (
+                    <motion.ul key="pills" aria-label="Assistant activity"
+                        initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }} transition={HEIGHT}
+                        className="flex flex-wrap gap-2 overflow-hidden">
+                        <AnimatePresence initial={false}>
+                            {steps.map((step) => (
+                                <motion.li
+                                    key={step.id}
+                                    variants={chipVariants}
+                                    initial="hidden"
+                                    animate="show"
+                                    exit="exit"
+                                    layout
+                                    className={`rounded-full ${
+                                        step.done
+                                            ? 'p-px bg-neutral-200'
+                                            : 'p-px bg-gradient-to-r from-accent-200 via-accent-500 to-accent-200 agent-sheen-border agent-breathe'
+                                    }`}
+                                >
+                                    <span className={`flex items-center gap-2 rounded-full bg-white py-1 pl-2.5 pr-3 text-xs font-medium ${
+                                        step.done ? 'text-neutral-500' : ''
+                                    }`}>
+                                        {step.done ? <DoneTick /> : <RunningDot />}
+                                        <span className={step.done ? '' : 'agent-sheen-text bg-gradient-to-r from-neutral-500 via-accent-600 to-neutral-500'}>
+                                            {step.label}
+                                        </span>
+                                    </span>
+                                </motion.li>
+                            ))}
+                        </AnimatePresence>
+                    </motion.ul>
+                )}
+            </AnimatePresence>
+        </motion.div>
     );
 };
 
 ToolSteps.propTypes = {
+    finished: PropTypes.bool,
     steps: PropTypes.arrayOf(PropTypes.shape({
         id:    PropTypes.string.isRequired,
         label: PropTypes.string.isRequired,

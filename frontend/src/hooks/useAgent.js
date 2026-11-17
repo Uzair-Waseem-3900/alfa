@@ -17,7 +17,8 @@ const toMessage = (m) => ({ id: m.id, role: m.role, text: m.text });
 // boundaries, so overlapping pages are expected — dedupe, never duplicate.
 const mergeMessagesAsc = (a, b) => {
     const byId = new Map();
-    [...a, ...b].forEach((m) => byId.set(m.id, m));
+    // Spread keeps client-only fields (React key, tool steps) that an older copy of the same message carried.
+    [...a, ...b].forEach((m) => byId.set(m.id, { ...byId.get(m.id), ...m }));
     return [...byId.values()].sort((x, y) => x.id - y.id);
 };
 
@@ -136,6 +137,7 @@ export const useChatConversation = (chatId, { onRunFinished } = {}) => {
     const abortRef = useRef(null);
     const tokenBuffer = useRef('');
     const rafRef = useRef(null);
+    const liveRef = useRef([]);
     const onRunFinishedRef = useRef(onRunFinished);
     onRunFinishedRef.current = onRunFinished;
 
@@ -195,12 +197,19 @@ export const useChatConversation = (chatId, { onRunFinished } = {}) => {
         }
     }, [chatId, loadingEarlier, pagesLoaded, totalPages, toast]);
 
-    // Replace the optimistic turn with what the server actually stored.
+    // Replace the optimistic turn with what the server actually stored. The stored copy keeps the live turn's React key
+    // (and the tool steps, which the server does not store), so the bubble is NOT remounted: no flash, no jump.
     const syncLatest = useCallback(async (forChatId) => {
         try {
             const res = await agentApi.getMessages(forChatId, { page: 1, page_size: PAGE_SIZE });
             if (chatIdRef.current !== forChatId) return;
-            setHistory((prev) => mergeMessagesAsc(prev, res.results.map(toMessage)));
+            const stored = res.results.map(toMessage);
+            const liveBot = liveRef.current.find((m) => m.role === 'assistant');
+            const liveUser = liveRef.current.find((m) => m.role === 'user');
+            // results are newest first: [assistant answer, the user message that asked it, ...]
+            if (liveBot && stored[0]?.role === 'assistant') stored[0] = { ...stored[0], key: liveBot.id, steps: liveBot.steps };
+            if (liveUser && stored[1]?.role === 'user') stored[1] = { ...stored[1], key: liveUser.id };
+            setHistory((prev) => mergeMessagesAsc(prev, stored));
             setTotalPages(res.total_pages);
             setLive([]);
         } catch {
@@ -289,6 +298,8 @@ export const useChatConversation = (chatId, { onRunFinished } = {}) => {
         if (succeeded) await syncLatest(chatId);
         return succeeded;
     }, [chatId, syncLatest, toast]);
+
+    liveRef.current = live;
 
     return {
         messages: [...history, ...live],

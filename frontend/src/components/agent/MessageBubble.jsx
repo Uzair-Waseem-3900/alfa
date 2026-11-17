@@ -104,7 +104,7 @@ const MessageBubble = ({ message, assistantName, onRetry, instant = false }) => 
             <div className="flex-1 min-w-0">
                 <p className="text-xs font-semibold text-neutral-500 mb-1">{assistantName}</p>
 
-                <ToolSteps steps={message.steps} />
+                <ToolSteps steps={message.steps} finished={!streaming} />
 
                 {waiting && <ThinkingDots />}
 

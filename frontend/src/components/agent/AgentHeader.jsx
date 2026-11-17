@@ -1,7 +1,8 @@
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, PanelLeft, ReceiptText, Sparkles, SquarePen } from 'lucide-react';
+import { ArrowLeft, PanelLeft, ReceiptText, SquarePen } from 'lucide-react';
+import AgentIcon from './AgentIcon';
 import { AssistantAvatar } from './MessageBubble';
 
 // ─── variants ──────────────────────────────────────────────────────────────
@@ -24,7 +25,7 @@ const itemFade = {
 // where it was on the PREVIOUS page (module memory) and springs to its new slot: it reads as one control sliding.
 let lastMode = null;
 const TABS = [
-    { key: 'assistant', to: '/agent',      label: 'Assistant',     icon: Sparkles,    title: 'Ask the assistant about your business' },
+    { key: 'assistant', to: '/agent',      label: 'Assistant',     icon: AgentIcon,    title: 'Ask the assistant about your business' },
     { key: 'bulk',      to: '/agent/bulk', label: 'Bulk invoices', icon: ReceiptText, title: 'Create many invoices at once' },
 ];
 

@@ -1,7 +1,6 @@
 import { memo } from 'react';
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Sparkles } from 'lucide-react';
 import MarkdownContent from './MarkdownContent';
 import ToolSteps from './ToolSteps';
 import InlineAlert from '../ui/InlineAlert';
@@ -22,15 +21,13 @@ export const AssistantAvatar = ({ className = '', active = false }) => (
                 />
             )}
         </AnimatePresence>
-        <div className={`relative w-full h-full rounded-full bg-gradient-to-br from-primary-600 to-accent-600 flex items-center justify-center ${active ? 'agent-glow' : ''}`}>
-            <motion.span
-                className="inline-flex"
-                animate={active ? { rotate: [0, 14, -10, 0], scale: [1, 1.15, 1] } : { rotate: 0, scale: 1 }}
-                transition={active ? { duration: 1.8, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
-            >
-                <Sparkles className="w-4 h-4 text-white" />
-            </motion.span>
-        </div>
+        <motion.div
+            className={`relative w-full h-full rounded-full overflow-hidden bg-primary-900 ${active ? 'agent-glow' : ''}`}
+            animate={active ? { scale: [1, 1.08, 1] } : { scale: 1 }}
+            transition={active ? { duration: 1.8, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
+        >
+            <img src="/agent_icon.png" alt="" draggable={false} className="w-full h-full object-cover select-none" />
+        </motion.div>
     </div>
 );
 

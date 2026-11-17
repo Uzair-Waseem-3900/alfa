@@ -327,12 +327,12 @@
     transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .agent-cta:hover:not(:disabled)::after { transform: translateX(130%); }
-.agent-cta > svg { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
-.agent-cta:hover:not(:disabled) > svg { transform: rotate(-10deg) scale(1.15); }
+.agent-cta > svg, .agent-cta > img { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.agent-cta:hover:not(:disabled) > svg, .agent-cta:hover:not(:disabled) > img { transform: rotate(-10deg) scale(1.15); }
 
 @media (prefers-reduced-motion: reduce) {
     .agent-press, .agent-cta { transition: background-color 0.2s ease, border-color 0.2s ease; }
     .agent-press:hover, .agent-press:active, .agent-cta:hover, .agent-cta:active { transform: none; }
     .agent-cta::after { display: none; }
-    .agent-cta > svg, .agent-cta:hover > svg { transform: none; transition: none; }
+    .agent-cta > svg, .agent-cta:hover > svg, .agent-cta > img, .agent-cta:hover > img { transform: none; transition: none; }
 }

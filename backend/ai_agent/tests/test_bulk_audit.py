@@ -134,3 +134,28 @@ class QtyAtRateEdgeTests(BulkWorld, TransactionTestCase):
         result = self.create(unit_rate=228.555)
         stored_discount = Invoice.objects.get(pk=result["invoice_id"]).items.get().discount
         self.assertIn(f"Rs {Decimal('230') - stored_discount:,.2f}", result["summary_markdown"])
+
+
+class BareDiscountNumberTests(QtyAtRateEdgeTests):
+    """A real bulk row sent "discount of 1" as 1% and got Rs 2.30 per unit on a Rs 230 product."""
+
+    def test_a_percent_line_discount_is_explained_in_rupees_so_a_misread_unit_is_visible(self):
+        result = self.create(discount_percent=1)
+        self.assertEqual(Invoice.objects.get(pk=result["invoice_id"]).items.get().discount, Decimal("2.3"))
+        self.assertIn("1% line discount on Pen Blue is Rs 2.30 per unit of its Rs 230.00 rate", result["summary_markdown"])
+        self.assertIn("if you meant rupees", result["summary_markdown"])
+
+    def test_a_rupee_discount_has_no_percent_note(self):
+        result = self.create(discount_amount=1)
+        self.assertEqual(Invoice.objects.get(pk=result["invoice_id"]).items.get().discount, Decimal("1"))
+        self.assertNotIn("line discount on", result["summary_markdown"])
+
+    def test_every_place_the_model_reads_says_a_bare_number_is_rupees(self):
+        from pathlib import Path
+
+        from ai_agent.instructions import bulk as bulk_prompt
+        from ai_agent.my_tool.invoice_tool import create_draft_invoice
+        guide = (Path(bulk_prompt.__file__).parent / "guides" / "invoices.md").read_text(encoding="utf-8")
+        self.assertIn("RUPEES per unit", create_draft_invoice.description)
+        self.assertIn("RUPEES per unit", guide)
+        self.assertIn("RUPEES per unit", bulk_prompt._STATIC)

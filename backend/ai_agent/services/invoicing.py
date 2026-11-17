@@ -165,6 +165,23 @@ def _rate_notes(lines, products) -> list[str]:
     return notes
 
 
+def _percent_notes(lines, products) -> list[str]:
+    """A percent line discount is converted to rupees per unit in code: say so, so a misread unit is visible at once."""
+    notes = []
+    for ln in lines:
+        if ln.discount_percent is None:
+            continue
+        product = products[ln.product_id]
+        rate = product.rate.selling_price
+        rupees = quantize(rate * Decimal(str(ln.discount_percent)) / Decimal("100"))
+        notes.append(
+            f"the {Decimal(str(ln.discount_percent)).normalize():f}% line discount on {_md(product.name)} "
+            f"is Rs {abs(rupees):,.2f} per unit of its Rs {rate:,.2f} rate"
+            "; if you meant rupees, tell me and I will change it"
+        )
+    return notes
+
+
 def _require_looked_up(known, *, customer_id=None, product_ids=()) -> None:
     """Refuse an id the model did not get from find_customer_for_invoice / find_product_for_invoice in this run."""
     if known is None:
@@ -406,7 +423,7 @@ def create_draft(
     except DRFValidationError as exc:
         raise ToolInputError(explain(exc))
 
-    return _result(_fresh(invoice.id), result="draft_created", defaults=defaults, notes=_rate_notes(lines, products))
+    return _result(_fresh(invoice.id), result="draft_created", defaults=defaults, notes=_rate_notes(lines, products) + _percent_notes(lines, products))
 
 
 # --------------------------------------------------------------------------- UPDATE
@@ -500,7 +517,7 @@ def update_draft(
     except DRFValidationError as exc:
         raise ToolInputError(explain(exc))
 
-    notes = _rate_notes(set_lines, products)
+    notes = _rate_notes(set_lines, products) + _percent_notes(set_lines, products)
     if had_shelf_choices:
         notes.append("the shelf choices on this draft were cleared by the edit; set them again in the Billing page before confirming")
     return _result(_fresh(invoice.id), result="draft_updated", defaults=[], notes=notes)

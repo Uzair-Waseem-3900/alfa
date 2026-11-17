@@ -122,6 +122,7 @@ def create_draft_invoice(
     use defaults (0, 0, 0, due in 7 days). A plain "discount" is a LINE discount on every line
     unless a product is named: use discount_percent (of that product's rate) or discount_amount
     (Rs off per unit); a NEGATIVE value is a SURCHARGE (price increase), e.g. "-2" -> discount_amount -2.
+    A bare number with no unit ("discount of 1", "give him 5 off") is RUPEES per unit: discount_amount. Use discount_percent ONLY when the user writes %, percent or percentage.
     "qty@rate" (e.g. "300@228") is the user's price per unit: pass it as unit_rate on that line and do NOT
     work out a discount yourself (the system stores the difference to the rate list as a discount, or a surcharge if higher).
     Never change a number or its sign from what the user said. Use invoice_discount only if the user says "invoice discount" or "whole

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { ReceiptText } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useAgentChats, useChatConversation } from '../../hooks/useAgent';
 import AgentHeader from '../../components/agent/AgentHeader';
@@ -94,7 +95,6 @@ const AgentPage = () => {
                 onRename={chatList.renameChat}
                 onDelete={handleDelete}
                 onTeamChats={user?.role === 'superuser' ? () => navigate('/agent/team') : undefined}
-                onBulkInvoices={() => navigate('/agent/bulk')}
             />
 
             <div className="flex flex-1 min-w-0 flex-col">
@@ -103,6 +103,13 @@ const AgentPage = () => {
                     sidebarOpen={sidebarOpen}
                     onToggleSidebar={() => setSidebarOpen((o) => !o)}
                     onNewChat={handleNewChat}
+                    actions={(
+                        <Link to="/agent/bulk" aria-label="Switch to bulk invoices" title="Create many invoices at once"
+                            className="inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                            <ReceiptText className="w-4 h-4" aria-hidden="true" />
+                            <span className="hidden sm:inline">Bulk invoices</span>
+                        </Link>
+                    )}
                 />
 
                 <MessageList

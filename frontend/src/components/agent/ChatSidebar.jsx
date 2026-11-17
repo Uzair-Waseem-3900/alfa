@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { differenceInCalendarDays, isToday, isYesterday } from 'date-fns';
-import { Check, Loader2, MessageSquare, MoreHorizontal, Pencil, Plus, ReceiptText, Trash2, Users, X } from 'lucide-react';
+import { Check, Loader2, MessageSquare, MoreHorizontal, Pencil, Plus, Trash2, Users, X } from 'lucide-react';
 import ConfirmDialog from '../ui/ConfirmDialog';
 import InlineAlert from '../ui/InlineAlert';
 
@@ -182,7 +182,7 @@ ChatItem.propTypes = {
 
 const ChatSidebar = ({
     open, onClose, chats, loading, error, onRetry, activeId, hasMore, loadingMore, onLoadMore,
-    onNewChat, onSelect, onRename, onDelete, onTeamChats, onBulkInvoices,
+    onNewChat, onSelect, onRename, onDelete, onTeamChats,
 }) => {
     const [toDelete, setToDelete] = useState(null);
     const [deleting, setDeleting] = useState(false);
@@ -234,18 +234,6 @@ const ChatSidebar = ({
                     <X className="w-5 h-5" />
                 </motion.button>
             </div>
-
-            {onBulkInvoices && (
-                <div className="px-3 pb-1">
-                    <motion.button
-                        whileTap={{ scale: 0.97 }}
-                        type="button" onClick={onBulkInvoices}
-                        className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm font-medium text-neutral-700 hover:bg-neutral-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-                    >
-                        <ReceiptText className="w-4 h-4 text-neutral-500" aria-hidden="true" /> Bulk invoices
-                    </motion.button>
-                </div>
-            )}
 
             {/* Superuser only: read-only view of everyone's chats */}
             {onTeamChats && (
@@ -403,7 +391,6 @@ ChatSidebar.propTypes = {
     onRename:     PropTypes.func.isRequired,
     onDelete:     PropTypes.func.isRequired,
     onTeamChats:  PropTypes.func,
-    onBulkInvoices: PropTypes.func,
 };
 
 export default ChatSidebar;

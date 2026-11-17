@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Loader2, Plus, Square, X } from 'lucide-react';
+import { Loader2, Plus, Sparkles, Square, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { bulkApi } from '../../services/agentApi';
@@ -182,8 +182,10 @@ const BulkInvoicesPage = () => {
                     onToggleSidebar={() => setSidebarOpen((o) => !o)}
                     onNewChat={() => goto('/agent/bulk')}
                     actions={(
-                        <Link to="/agent" className="hidden sm:inline-flex items-center rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100">
-                            Assistant
+                        <Link to="/agent" aria-label="Switch to the assistant" title="Ask the assistant about your business"
+                            className="inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                            <Sparkles className="w-4 h-4" aria-hidden="true" />
+                            <span className="hidden sm:inline">Assistant</span>
                         </Link>
                     )}
                 />

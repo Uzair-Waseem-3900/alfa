@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
-import { Menu, ReceiptText } from 'lucide-react';
-import AgentIcon from '../agent/AgentIcon';
+import { Menu } from 'lucide-react';
+import AgentIcon, { BulkIcon } from '../agent/AgentIcon';
 import Button from '../ui/Button';
 
 const ROLE_LABELS = { superuser: 'Superuser', admin: 'Admin' };
@@ -38,7 +38,7 @@ const Header = ({ user, onToggleSidebar, onLogout }) => {
                                 aria-label="Open bulk invoices"
                                 className="agent-cta inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-700 to-accent-600 px-3 sm:px-4 min-h-[40px] text-sm font-medium text-white shadow-sm hover:from-primary-800 hover:to-accent-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
                             >
-                                <ReceiptText className="w-4 h-4" aria-hidden="true" />
+                                <BulkIcon className="w-5 h-5" />
                                 <span className="hidden sm:inline">Bulk invoices</span>
                             </Link>
                         </>

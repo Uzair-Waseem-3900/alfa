@@ -7,7 +7,7 @@ import InlineAlert from '../ui/InlineAlert';
 
 // ─── Avatar ────────────────────────────────────────────────────────────────
 
-export const AssistantAvatar = ({ className = '', active = false }) => (
+export const AssistantAvatar = ({ className = '', active = false, src = '/agent_icon.png' }) => (
     <div className={`relative w-8 h-8 flex-shrink-0 ${className}`} aria-hidden="true">
         {/* Live ring: only while the assistant is working on an answer */}
         <AnimatePresence>
@@ -26,12 +26,12 @@ export const AssistantAvatar = ({ className = '', active = false }) => (
             animate={active ? { scale: [1, 1.08, 1] } : { scale: 1 }}
             transition={active ? { duration: 1.8, repeat: Infinity, ease: 'easeInOut' } : { duration: 0.2 }}
         >
-            <img src="/agent_icon.png" alt="" draggable={false} className="w-full h-full object-cover select-none" />
+            <img src={src} alt="" draggable={false} className="w-full h-full object-cover select-none" />
         </motion.div>
     </div>
 );
 
-AssistantAvatar.propTypes = { className: PropTypes.string, active: PropTypes.bool };
+AssistantAvatar.propTypes = { className: PropTypes.string, active: PropTypes.bool, src: PropTypes.string };
 
 // ─── Thinking dots ─────────────────────────────────────────────────────────
 

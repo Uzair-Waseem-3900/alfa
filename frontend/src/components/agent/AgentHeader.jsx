@@ -1,8 +1,9 @@
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, PanelLeft, ReceiptText, SquarePen } from 'lucide-react';
-import AgentIcon from './AgentIcon';
+import { ArrowLeft, PanelLeft, SquarePen } from 'lucide-react';
+import AgentIcon, { BulkIcon } from './AgentIcon';
+import { ICON_SRC } from '../../utils/agentIcons';
 import { AssistantAvatar } from './MessageBubble';
 
 // ─── variants ──────────────────────────────────────────────────────────────
@@ -26,7 +27,7 @@ const itemFade = {
 let lastMode = null;
 const TABS = [
     { key: 'assistant', to: '/agent',      label: 'Assistant',     icon: AgentIcon,    title: 'Ask the assistant about your business' },
-    { key: 'bulk',      to: '/agent/bulk', label: 'Bulk invoices', icon: ReceiptText, title: 'Create many invoices at once' },
+    { key: 'bulk',      to: '/agent/bulk', label: 'Bulk invoices', icon: BulkIcon, title: 'Create many invoices at once' },
 ];
 
 const ModeSwitch = ({ mode }) => {
@@ -96,7 +97,7 @@ const AgentHeader = ({
             variants={itemFade}
             className="flex items-center gap-2.5 min-w-0"
         >
-            <AssistantAvatar active={busy} />
+            <AssistantAvatar active={busy} src={mode === 'bulk' ? ICON_SRC.bulk : ICON_SRC.agent} />
             <div className="min-w-0 leading-tight">
                 <h1 className="text-sm font-semibold text-neutral-900 truncate">{assistantName}</h1>
                 <p className="hidden sm:block text-xs text-neutral-500">{subtitle}</p>

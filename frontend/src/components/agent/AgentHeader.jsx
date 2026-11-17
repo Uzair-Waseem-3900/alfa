@@ -106,9 +106,9 @@ const AgentHeader = ({
         <AnimatePresence>
             <motion.span
                 key="status-dot"
-                className="hidden sm:block w-2 h-2 rounded-full bg-success-400"
-                animate={{ scale: [1, 1.4, 1], opacity: [0.7, 1, 0.7] }}
-                transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
+                className={`hidden sm:block w-2 h-2 rounded-full transition-colors duration-300 ${busy ? 'bg-accent-500' : 'bg-success-400'}`}
+                animate={busy ? { scale: [1, 1.8, 1], opacity: [0.8, 1, 0.8] } : { scale: [1, 1.4, 1], opacity: [0.7, 1, 0.7] }}
+                transition={{ duration: busy ? 0.9 : 2.4, repeat: Infinity, ease: 'easeInOut' }}
                 aria-hidden="true"
             />
         </AnimatePresence>

@@ -293,3 +293,11 @@
     .agent-sheen-border, .agent-sheen-text, .agent-breathe, .agent-ripple { animation: none; }
     .agent-sheen-text { color: inherit; background: none; }
 }
+
+/* Avatar glow while the assistant works: a halo on the avatar itself, so it reads at any size / placement. */
+@keyframes agent-glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgb(11 143 255 / 0.55), 0 0 10px 1px rgb(11 143 255 / 0.35); }
+    50%      { box-shadow: 0 0 0 6px rgb(11 143 255 / 0),   0 0 22px 5px rgb(11 143 255 / 0.55); }
+}
+.agent-glow { animation: agent-glow 1.6s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .agent-glow { animation: none; box-shadow: 0 0 0 3px rgb(11 143 255 / 0.35); } }

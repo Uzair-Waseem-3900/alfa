@@ -22,7 +22,7 @@ export const AssistantAvatar = ({ className = '', active = false }) => (
                 />
             )}
         </AnimatePresence>
-        <div className="relative w-full h-full rounded-full bg-gradient-to-br from-primary-600 to-accent-600 flex items-center justify-center">
+        <div className={`relative w-full h-full rounded-full bg-gradient-to-br from-primary-600 to-accent-600 flex items-center justify-center ${active ? 'agent-glow' : ''}`}>
             <motion.span
                 className="inline-flex"
                 animate={active ? { rotate: [0, 14, -10, 0], scale: [1, 1.15, 1] } : { rotate: 0, scale: 1 }}

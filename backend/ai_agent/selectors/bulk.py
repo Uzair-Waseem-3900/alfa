@@ -2,7 +2,7 @@
 from datetime import timedelta
 
 from django.conf import settings
-from django.db.models import Count, Q, QuerySet
+from django.db.models import Count, Max, Q, QuerySet
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -11,12 +11,9 @@ from sales_man.selectors import get_all_link_names
 from ..models import AgentAction, BulkBatch, BulkItem
 
 
-def get_user_batches(user) -> QuerySet:
-    """My batches newest first with row counts in ONE grouped query (served by idx_bulkbatch_user_created
-    + idx_bulkitem_batch_status). Paginated by the view."""
+def _with_counts(qs: QuerySet) -> QuerySet:
     return (
-        BulkBatch.objects.filter(user=user)
-        .annotate(
+        qs.annotate(
             total=Count("items"),
             done=Count("items", filter=Q(items__status=BulkItem.Status.DONE)),
             attention=Count("items", filter=Q(items__status=BulkItem.Status.NEEDS_ATTENTION)),
@@ -25,6 +22,34 @@ def get_user_batches(user) -> QuerySet:
         )
         .order_by("-created_at")
     )
+
+
+def get_user_batches(user) -> QuerySet:
+    """My batches newest first with row counts in ONE grouped query (served by idx_bulkbatch_user_created
+    + idx_bulkitem_batch_status). Paginated by the view."""
+    return _with_counts(BulkBatch.objects.filter(user=user))
+
+
+# ---- team view (superuser, READ ONLY): every user's non-deleted batches -------------------------------------
+
+def get_batch_owners() -> QuerySet:
+    """One row per user who has bulk batches, most recently active first (one GROUP BY; paginated by the view)."""
+    return (
+        BulkBatch.objects
+        .values("user", "user__first_name", "user__last_name", "user__is_superuser")
+        .annotate(batch_count=Count("id"), last_active=Max("updated_at"))
+        .order_by("-last_active", "user")
+    )
+
+
+def get_batches_of_owner(email: str) -> QuerySet:
+    """Any one user's batches, newest first, with row counts (idx_bulkbatch_user_created). Superuser views only."""
+    return _with_counts(BulkBatch.objects.filter(user_id=email).select_related("user"))
+
+
+def get_any_batch_with_items(batch_id) -> BulkBatch:
+    """A batch of ANY owner with its rows in 3 queries. Superuser views only: never use it for the owner endpoints."""
+    return get_object_or_404(BulkBatch.objects.select_related("user").prefetch_related("items"), pk=batch_id)
 
 
 def get_user_batch(user, batch_id) -> BulkBatch:

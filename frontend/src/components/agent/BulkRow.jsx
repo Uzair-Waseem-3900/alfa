@@ -85,7 +85,7 @@ DraftSummary.propTypes = {
 
 const BTN = 'inline-flex items-center justify-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500';
 
-const BulkRow = ({ row, busy, onAnswer, onSkip, onRetry }) => {
+const BulkRow = ({ row, busy, readOnly = false, onAnswer, onSkip, onRetry }) => {
     const [text, setText] = useState('');
     const send = async (answer) => {
         const value = (answer ?? text).trim();
@@ -119,7 +119,19 @@ const BulkRow = ({ row, busy, onAnswer, onSkip, onRetry }) => {
 
             {row.status === 'done' && row.summary?.lines?.length > 0 && <DraftSummary summary={row.summary} />}
 
-            {row.status === 'needs_attention' && (
+            {readOnly && row.status === 'needs_attention' && (
+                <div className="pl-10 space-y-2">
+                    <p className="text-sm font-medium text-neutral-900 whitespace-pre-wrap">{row.question}</p>
+                    {row.options?.length > 0 && <p className="text-xs text-neutral-500">Options offered: {row.options.join(' · ')}</p>}
+                    <p className="text-xs text-neutral-500">Waiting for the owner to answer.</p>
+                </div>
+            )}
+
+            {readOnly && (row.status === 'failed' || row.status === 'not_invoice') && (
+                <p className="pl-10 text-sm text-neutral-700 whitespace-pre-wrap">{row.message}</p>
+            )}
+
+            {!readOnly && row.status === 'needs_attention' && (
                 <div className="pl-10 space-y-3">
                     <p className="text-sm font-medium text-neutral-900 whitespace-pre-wrap">{row.question}</p>
                     {row.options?.length > 0 && (
@@ -149,7 +161,7 @@ const BulkRow = ({ row, busy, onAnswer, onSkip, onRetry }) => {
                 </div>
             )}
 
-            {(row.status === 'failed' || row.status === 'not_invoice') && (
+            {!readOnly && (row.status === 'failed' || row.status === 'not_invoice') && (
                 <div className="pl-10 space-y-2">
                     <p className="text-sm text-neutral-700 whitespace-pre-wrap">{row.message}</p>
                     {row.status === 'not_invoice' && (
@@ -181,9 +193,10 @@ BulkRow.propTypes = {
         bill_number: PropTypes.string, invoice_id: PropTypes.number, customer_label: PropTypes.string, summary: PropTypes.object,
     }).isRequired,
     busy: PropTypes.bool,
-    onAnswer: PropTypes.func.isRequired,
-    onSkip: PropTypes.func.isRequired,
-    onRetry: PropTypes.func.isRequired,
+    readOnly: PropTypes.bool,
+    onAnswer: PropTypes.func,
+    onSkip: PropTypes.func,
+    onRetry: PropTypes.func,
 };
 
 export default BulkRow;

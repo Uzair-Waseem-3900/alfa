@@ -132,3 +132,36 @@ class LinkNameOptionSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     name = serializers.CharField()
     sales_man = serializers.CharField(source="sales_man.name")
+
+
+# --------------------------------------------------------------------------- team bulk (superuser, read only)
+
+class TeamBulkOwnerSerializer(serializers.Serializer):
+    email = serializers.EmailField(source="user")
+    name = serializers.SerializerMethodField()
+    is_superuser = serializers.BooleanField(source="user__is_superuser")
+    batch_count = serializers.IntegerField()
+    last_active = serializers.DateTimeField()
+
+    def get_name(self, row):
+        return f"{row['user__first_name']} {row['user__last_name']}".strip() or row["user"]
+
+
+class _OwnerFields(serializers.Serializer):
+    owner_email = serializers.EmailField(source="user_id", read_only=True)
+    owner_name = serializers.SerializerMethodField()
+
+    def get_owner_name(self, batch):
+        return batch.user.full_name or batch.user_id
+
+
+class TeamBulkBatchSerializer(_OwnerFields, BulkBatchSerializer):
+    class Meta(BulkBatchSerializer.Meta):
+        fields = BulkBatchSerializer.Meta.fields + ["owner_email", "owner_name"]
+        read_only_fields = fields
+
+
+class TeamBulkBatchDetailSerializer(_OwnerFields, BulkBatchDetailSerializer):
+    class Meta(BulkBatchDetailSerializer.Meta):
+        fields = BulkBatchDetailSerializer.Meta.fields + ["owner_email", "owner_name"]
+        read_only_fields = fields

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Loader2, Plus, Sparkles, Square, X } from 'lucide-react';
+import { Loader2, Plus, Sparkles, Square, Users, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { bulkApi } from '../../services/agentApi';
@@ -142,6 +142,14 @@ const BulkInvoicesPage = () => {
                         <X className="w-5 h-5" />
                     </button>
                 </div>
+                {user?.role === 'superuser' && (
+                    <div className="px-3 pb-2">
+                        <button type="button" onClick={() => goto('/agent/bulk-team')}
+                            className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm font-medium text-neutral-700 hover:bg-neutral-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                            <Users className="w-4 h-4 text-neutral-500" aria-hidden="true" /> Team bulk invoices
+                        </button>
+                    </div>
+                )}
                 <nav className="flex-1 overflow-y-auto overscroll-contain px-2 pb-4">
                     {batches.loading ? (
                         <div className="space-y-2 px-1 pt-2" aria-hidden="true">

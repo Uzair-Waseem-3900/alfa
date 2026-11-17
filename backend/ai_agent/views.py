@@ -18,7 +18,8 @@ from .selectors import (
 )
 from .serializers import (
     BulkAnswerSerializer, BulkBatchDetailSerializer, BulkBatchSerializer, BulkItemSerializer,
-    CreateBulkBatchSerializer, LinkNameOptionSerializer, ChatOwnerSerializer, ChatSerializer, ChatTitleSerializer, MessageSerializer, SendMessageSerializer,
+    CreateBulkBatchSerializer, LinkNameOptionSerializer, ChatOwnerSerializer, TeamBulkBatchDetailSerializer,
+    TeamBulkBatchSerializer, TeamBulkOwnerSerializer, ChatSerializer, ChatTitleSerializer, MessageSerializer, SendMessageSerializer,
     TeamChatSerializer,
 )
 from .services import bulk as bulk_service
@@ -122,6 +123,34 @@ class TeamChatMessagesView(generics.ListAPIView):
 
     def get_queryset(self):
         return get_visible_messages(get_any_chat(self.kwargs["chat_id"]))
+
+
+class TeamBulkOwnersView(generics.ListAPIView):
+    """GET /api/agent/team/bulk/users/ — users who have bulk batches (paginated, most recently active first)."""
+    permission_classes = [IsSuperuser]
+    serializer_class = TeamBulkOwnerSerializer
+
+    def get_queryset(self):
+        return bulk_sel.get_batch_owners()
+
+
+class TeamBulkUserBatchesView(generics.ListAPIView):
+    """GET /api/agent/team/bulk/users/<email>/batches/ — that user's batches with row counts (paginated)."""
+    permission_classes = [IsSuperuser]
+    serializer_class = TeamBulkBatchSerializer
+
+    def get_queryset(self):
+        return bulk_sel.get_batches_of_owner(self.kwargs["email"])
+
+
+class TeamBulkBatchDetailView(generics.RetrieveAPIView):
+    """GET /api/agent/team/bulk/batches/<id>/ — one batch with all its rows. Read only: unlike the owner's own
+    endpoint it never repairs stale rows (a GET by someone else must not change anything)."""
+    permission_classes = [IsSuperuser]
+    serializer_class = TeamBulkBatchDetailSerializer
+
+    def get_object(self):
+        return bulk_sel.get_any_batch_with_items(self.kwargs["batch_id"])
 
 
 # ---------------------------------------------------------------------------

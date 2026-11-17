@@ -171,6 +171,7 @@ import LoadingSpinner from './components/ui/LoadingSpinner';
 const AgentPage = lazy(() => import('./pages/agent/AgentPage'));
 const TeamChatsPage = lazy(() => import('./pages/agent/TeamChatsPage'));
 const BulkInvoicesPage = lazy(() => import('./pages/agent/BulkInvoicesPage'));
+const TeamBulkPage = lazy(() => import('./pages/agent/TeamBulkPage'));
 
 import './App.css';
 
@@ -1203,6 +1204,15 @@ const AppContent = () => {
             never remounts the page. */}
         {/* Superuser-only read-only view of every user's chats (static "team"
             outranks the :chatId param above). */}
+        {/* Superuser-only, read-only view of every user's bulk batches. */}
+        <Route path="/agent/bulk-team/:email?/:batchId?" element={
+          <ProtectedRoute>
+            <Suspense fallback={<div className="min-h-screen flex items-center justify-center"><LoadingSpinner size="lg" /></div>}>
+              <TeamBulkPage />
+            </Suspense>
+          </ProtectedRoute>
+        } />
+
         {/* Bulk invoice creation (admin/superuser): many prompts, one draft each, worked in a queue. */}
         <Route path="/agent/bulk/:batchId?" element={
           <ProtectedRoute>

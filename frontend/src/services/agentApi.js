@@ -21,6 +21,13 @@ export const teamApi = {
     getMessages: (id, params = {}) => api.get(`/agent/team/chats/${id}/messages/`, { params }),
 };
 
+// Superuser-only, READ-ONLY view of every user's bulk-invoice batches.
+export const teamBulkApi = {
+    listOwners: (params = {}) => api.get('/agent/team/bulk/users/', { params }),
+    listBatches: (email, params = {}) => api.get(`/agent/team/bulk/users/${encodeURIComponent(email)}/batches/`, { params }),
+    getBatch: (id) => api.get(`/agent/team/bulk/batches/${id}/`),
+};
+
 // Bulk invoices: many prompts, one draft invoice each, worked one after another on the server.
 export const bulkApi = {
     linkNames: (params = {}) => api.get('/agent/bulk/link-names/', { params }),

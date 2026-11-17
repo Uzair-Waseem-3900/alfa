@@ -56,6 +56,7 @@ class ItemEvent(BaseModel):
     bill_number: str = ""
     invoice_id: int | None = None
     customer_label: str = ""
+    summary: dict = {}
 
 
 class BatchIdleEvent(BaseModel):

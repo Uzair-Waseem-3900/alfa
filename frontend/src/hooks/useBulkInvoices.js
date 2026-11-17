@@ -28,7 +28,7 @@ const applyEvent = (items, d) =>
     items.map((row) => (row.id === d.item_id ? {
         ...row,
         status: d.status, attempts: d.attempts, question: d.question, options: d.options, message: d.message,
-        bill_number: d.bill_number, invoice_id: d.invoice_id, customer_label: d.customer_label,
+        bill_number: d.bill_number, invoice_id: d.invoice_id, customer_label: d.customer_label, summary: d.summary,
     } : row));
 
 const replaceRow = (items, updated) => items.map((row) => (row.id === updated.id ? { ...row, ...updated } : row));

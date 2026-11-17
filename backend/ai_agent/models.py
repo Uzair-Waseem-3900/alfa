@@ -288,6 +288,7 @@ class BulkItem(models.Model):
     bill_number = models.CharField(max_length=30, blank=True, default="")
     invoice_id = models.PositiveIntegerField(null=True, blank=True)   # plain int: the audit outlives the invoice
     customer_label = models.CharField(max_length=300, blank=True, default="")   # who the draft went to ("NAME (CODE)")
+    summary = models.JSONField(default=dict, blank=True)    # snapshot at creation: lines (qty, rate, line total) + grand total
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

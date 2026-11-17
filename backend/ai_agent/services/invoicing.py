@@ -312,6 +312,34 @@ def build_summary(invoice, *, defaults: list[str], notes: list[str] | None = Non
     return "\n".join(lines)
 
 
+def digest(invoice) -> dict:
+    """What a bulk row shows after the draft exists: every line (quantity, the rate actually charged per unit, line
+    total) and the grand total. All numbers come from billing's print context (the single source of truth)."""
+    ctx = get_invoice_print_context(invoice)
+
+    def money(value):
+        return None if value is None else f"{Decimal(value):.2f}"
+
+    lines = []
+    for item, computed in zip(invoice.items.all(), ctx["items"]):
+        try:
+            list_rate = money(item.product.rate.selling_price)
+        except Exception:
+            list_rate = None
+        lines.append({
+            "product": item.product.name, "code": item.product.code, "quantity": item.quantity,
+            "rate": money(computed["effective_price"]),          # per unit, after the line discount / surcharge
+            "list_rate": list_rate, "line_total": money(computed["line_total"]),
+        })
+    percent = ctx.get("invoice_discount_percent")
+    return {
+        "lines": lines,
+        "invoice_discount": money(ctx["invoice_discount"]) if ctx.get("invoice_discount") else None,
+        "invoice_discount_percent": f"{Decimal(percent).normalize():f}" if percent else None,
+        "grand_total": money(ctx["grand_total"]),
+    }
+
+
 def _fresh(invoice_id: int):
     from billing.selectors import get_invoice_by_id
     return get_invoice_by_id(invoice_id)

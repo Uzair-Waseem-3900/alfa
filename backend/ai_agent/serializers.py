@@ -79,7 +79,7 @@ class BulkItemSerializer(serializers.ModelSerializer):
         model = BulkItem
         fields = [
             "id", "position", "prompt", "status", "attempts", "question", "options", "message",
-            "bill_number", "invoice_id", "customer_label", "updated_at",
+            "bill_number", "invoice_id", "customer_label", "summary", "updated_at",
         ]
         read_only_fields = fields
 

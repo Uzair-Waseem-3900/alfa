@@ -30,6 +30,59 @@ export const StatusChip = ({ status }) => {
 
 StatusChip.propTypes = { status: PropTypes.string.isRequired };
 
+const rs = (v) => (v == null ? 'N/A' : `Rs ${Number(v).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+
+// What was created: every line (quantity x the rate charged per unit) and the grand total, as billing calculated them.
+const DraftSummary = ({ summary }) => (
+    <div className="ml-10 rounded-xl border border-neutral-200 bg-neutral-50 overflow-hidden text-sm">
+        <div className="overflow-x-auto">
+            <table className="w-full">
+                <caption className="sr-only">Items on this draft invoice</caption>
+                <thead>
+                    <tr className="text-left text-xs text-neutral-500">
+                        <th scope="col" className="px-3 py-2 font-medium">Item</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">Qty</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">Rate</th>
+                        <th scope="col" className="px-3 py-2 font-medium text-right">Total</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {summary.lines.map((l, i) => (
+                        <tr key={`${l.code}-${i}`} className="border-t border-neutral-200">
+                            <td className="px-3 py-2 text-neutral-800 min-w-[8rem]">{l.product}</td>
+                            <td className="px-3 py-2 text-right tabular-nums">{l.quantity}</td>
+                            <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">
+                                {rs(l.rate)}
+                                {l.list_rate && l.rate && Number(l.list_rate) !== Number(l.rate) && (
+                                    <span className="block text-xs text-neutral-500">list {rs(l.list_rate)}</span>
+                                )}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums whitespace-nowrap">{rs(l.line_total)}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+        <div className="border-t border-neutral-200 px-3 py-2 space-y-0.5">
+            {summary.invoice_discount && (
+                <p className="flex justify-between text-neutral-600">
+                    <span>Invoice discount{summary.invoice_discount_percent ? ` (${summary.invoice_discount_percent}%)` : ''}</span>
+                    <span className="tabular-nums">- {rs(summary.invoice_discount)}</span>
+                </p>
+            )}
+            <p className="flex justify-between font-semibold text-neutral-900">
+                <span>Grand total</span><span className="tabular-nums">{rs(summary.grand_total)}</span>
+            </p>
+        </div>
+    </div>
+);
+
+DraftSummary.propTypes = {
+    summary: PropTypes.shape({
+        lines: PropTypes.array, invoice_discount: PropTypes.string, invoice_discount_percent: PropTypes.string, grand_total: PropTypes.string,
+    }).isRequired,
+};
+
 const BTN = 'inline-flex items-center justify-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500';
 
 const BulkRow = ({ row, busy, onAnswer, onSkip, onRetry }) => {
@@ -63,6 +116,8 @@ const BulkRow = ({ row, busy, onAnswer, onSkip, onRetry }) => {
                     )}
                 </div>
             )}
+
+            {row.status === 'done' && row.summary?.lines?.length > 0 && <DraftSummary summary={row.summary} />}
 
             {row.status === 'needs_attention' && (
                 <div className="pl-10 space-y-3">
@@ -123,7 +178,7 @@ BulkRow.propTypes = {
     row: PropTypes.shape({
         id: PropTypes.number.isRequired, position: PropTypes.number.isRequired, prompt: PropTypes.string.isRequired,
         status: PropTypes.string.isRequired, question: PropTypes.string, options: PropTypes.array, message: PropTypes.string,
-        bill_number: PropTypes.string, invoice_id: PropTypes.number, customer_label: PropTypes.string,
+        bill_number: PropTypes.string, invoice_id: PropTypes.number, customer_label: PropTypes.string, summary: PropTypes.object,
     }).isRequired,
     busy: PropTypes.bool,
     onAnswer: PropTypes.func.isRequired,

@@ -18,6 +18,7 @@ from billing.models import Invoice
 from sales_man.selectors import get_link_name_by_id
 
 from ..models import BulkBatch, BulkItem, ChatRun
+from . import invoicing
 from ..schemas.context import BulkOutcome
 from ..selectors import bulk as sel
 
@@ -265,16 +266,16 @@ def start_attempt(item: BulkItem) -> ChatRun:
 
 
 def _mark_done(item_id, action, *, only_from) -> bool:
-    label = ""
+    label, summary = "", {}
     try:
-        invoice = Invoice.objects.select_related("customer").only(
-            "id", "customer__name", "customer__code").get(pk=action.invoice_id)
+        invoice = invoicing._fresh(action.invoice_id)
         label = f"{invoice.customer.name} ({invoice.customer.code})"
-    except Invoice.DoesNotExist:
-        pass
+        summary = invoicing.digest(invoice)
+    except Exception:   # the draft was deleted since, or billing could not price a line: the row is still DONE
+        logger.exception("bulk row %s: could not build the invoice summary", item_id)
     return bool(BulkItem.objects.filter(pk=item_id, status__in=only_from).update(
         status=BulkItem.Status.DONE, bill_number=action.bill_number, invoice_id=action.invoice_id,
-        customer_label=label[:300], question="", options=[], message="", finished_at=timezone.now(),
+        customer_label=label[:300], summary=summary, question="", options=[], message="", finished_at=timezone.now(),
         updated_at=timezone.now()))
 
 
@@ -308,5 +309,5 @@ def item_event(item: BulkItem) -> dict:
     return dict(
         item_id=item.pk, position=item.position, status=item.status, attempts=item.attempts, question=item.question,
         options=list(item.options or []), message=item.message, bill_number=item.bill_number,
-        invoice_id=item.invoice_id, customer_label=item.customer_label,
+        invoice_id=item.invoice_id, customer_label=item.customer_label, summary=item.summary or {},
     )

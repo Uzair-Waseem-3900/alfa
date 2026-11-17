@@ -1,5 +1,7 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { AnimatePresence } from 'framer-motion';
+import PageFade from './components/ui/PageFade';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { useKeepAlive } from './hooks/useKeepAlive';
@@ -177,10 +179,19 @@ import './App.css';
 
 const AppContent = () => {
   const { isAuthenticated } = useAuth();
+  const location = useLocation();
+
+  // Fade only when crossing between route groups: the software (everything
+  // else) and each assistant page (chat / bulk / team / bulk-team). Moving
+  // around inside the software, or between chats of the same assistant page,
+  // keeps the same key so it stays instant and never remounts.
+  const agentMatch = location.pathname.match(/^\/agent(?:\/(bulk-team|bulk|team))?(?:\/|$)/);
+  const routeGroup = agentMatch ? `agent-${agentMatch[1] || 'chat'}` : 'app';
 
   return (
-    <>
-      <Routes>
+    <AnimatePresence mode="wait" initial={false}>
+      <PageFade key={routeGroup}>
+      <Routes location={location}>
         {/* Auth Routes */}
         <Route path="/login" element={
           isAuthenticated ? <Navigate to="/dashboard" /> : <Login />
@@ -1247,7 +1258,8 @@ const AppContent = () => {
           </ProtectedRoute>
         } />
       </Routes>
-    </>
+      </PageFade>
+    </AnimatePresence>
   );
 };
 

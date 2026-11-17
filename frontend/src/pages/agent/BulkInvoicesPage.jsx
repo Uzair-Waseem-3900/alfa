@@ -164,18 +164,18 @@ const BulkInvoicesPage = () => {
             <SidebarShell open={sidebarOpen} onClose={() => setSidebarOpen(false)} label="Bulk invoice history">
                 <div className="flex items-center gap-2 p-3">
                     <button type="button" onClick={() => goto('/agent/bulk')}
-                        className="flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 min-h-[44px] text-sm font-semibold text-neutral-800 hover:bg-neutral-50 shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                        className="agent-press flex-1 inline-flex items-center justify-center gap-2 rounded-xl border border-neutral-300 bg-white px-4 min-h-[44px] text-sm font-semibold text-neutral-800 hover:bg-neutral-50 shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
                         <Plus className="w-4 h-4" aria-hidden="true" /> New bulk
                     </button>
                     <button type="button" onClick={() => setSidebarOpen(false)} aria-label="Close history"
-                        className="md:hidden w-11 h-11 flex items-center justify-center rounded-xl text-neutral-500 hover:bg-neutral-100 cursor-pointer">
+                        className="agent-press md:hidden w-11 h-11 flex items-center justify-center rounded-xl text-neutral-500 hover:bg-neutral-100 cursor-pointer">
                         <X className="w-5 h-5" />
                     </button>
                 </div>
                 {user?.role === 'superuser' && (
                     <div className="px-3 pb-2">
                         <button type="button" onClick={() => goto('/agent/bulk-team')}
-                            className="w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm font-medium text-neutral-700 hover:bg-neutral-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                            className="agent-press w-full flex items-center gap-2 rounded-xl px-3 min-h-[44px] text-sm font-medium text-neutral-700 hover:bg-neutral-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
                             <Users className="w-4 h-4 text-neutral-500" aria-hidden="true" /> Team bulk invoices
                         </button>
                     </div>
@@ -201,7 +201,7 @@ const BulkInvoicesPage = () => {
                             {batches.hasMore && (
                                 <li>
                                     <button type="button" onClick={batches.loadMore} disabled={batches.loadingMore}
-                                        className="w-full flex items-center justify-center gap-2 rounded-lg min-h-[44px] text-sm font-medium text-primary-700 hover:bg-neutral-100 cursor-pointer disabled:opacity-60">
+                                        className="agent-press w-full flex items-center justify-center gap-2 rounded-lg min-h-[44px] text-sm font-medium text-primary-700 hover:bg-neutral-100 cursor-pointer disabled:opacity-60">
                                         {batches.loadingMore && <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />} Show older
                                     </button>
                                 </li>
@@ -245,7 +245,7 @@ const BulkInvoicesPage = () => {
                                 </p>
                                 {working > 0 && batch.status !== 'cancelled' && (
                                     <button type="button" onClick={view.cancel}
-                                        className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 min-h-[44px] text-sm font-medium text-neutral-700 hover:bg-neutral-50 cursor-pointer">
+                                        className="agent-press inline-flex items-center gap-1.5 rounded-lg border border-neutral-300 bg-white px-3 min-h-[44px] text-sm font-medium text-neutral-700 hover:bg-neutral-50 cursor-pointer">
                                         <Square className="w-4 h-4" aria-hidden="true" /> Stop remaining
                                     </button>
                                 )}

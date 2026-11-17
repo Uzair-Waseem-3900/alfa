@@ -301,3 +301,38 @@
 }
 .agent-glow { animation: agent-glow 1.6s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .agent-glow { animation: none; box-shadow: 0 0 0 3px rgb(11 143 255 / 0.35); } }
+
+
+/* ── Button feedback for the dashboard Assistant/Bulk buttons and the assistant + bulk pages ───────────────
+   agent-press: quiet buttons — tiny lift on hover, press-in on click.
+   agent-cta:   gradient call-to-action — lift + glow, a light sweeps across on hover, icon tilts, press-in on click.
+   CSS only (no JS per button). Disabled buttons stay still. Reduced-motion users get colour changes only. */
+.agent-press, .agent-cta {
+    transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+.agent-press:hover:not(:disabled):not([aria-disabled="true"]),
+.agent-cta:hover:not(:disabled):not([aria-disabled="true"]) { transform: translateY(-1px); }
+.agent-press:active:not(:disabled):not([aria-disabled="true"]),
+.agent-cta:active:not(:disabled):not([aria-disabled="true"]) { transform: scale(0.96); transition-duration: 0.08s; }
+
+.agent-cta { position: relative; overflow: hidden; isolation: isolate; }
+.agent-cta:hover:not(:disabled) { box-shadow: 0 10px 22px -8px rgb(11 143 255 / 0.55); }
+.agent-cta::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(110deg, transparent 30%, rgb(255 255 255 / 0.32) 50%, transparent 70%);
+    transform: translateX(-130%);
+    transition: transform 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.agent-cta:hover:not(:disabled)::after { transform: translateX(130%); }
+.agent-cta > svg { transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); }
+.agent-cta:hover:not(:disabled) > svg { transform: rotate(-10deg) scale(1.15); }
+
+@media (prefers-reduced-motion: reduce) {
+    .agent-press, .agent-cta { transition: background-color 0.2s ease, border-color 0.2s ease; }
+    .agent-press:hover, .agent-press:active, .agent-cta:hover, .agent-cta:active { transform: none; }
+    .agent-cta::after { display: none; }
+    .agent-cta > svg, .agent-cta:hover > svg { transform: none; transition: none; }
+}

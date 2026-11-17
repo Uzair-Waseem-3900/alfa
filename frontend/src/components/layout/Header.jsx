@@ -26,7 +26,7 @@ const Header = ({ user, onToggleSidebar, onLogout }) => {
                                 to="/agent"
                                 title="Open the AI assistant"
                                 aria-label="Open the AI assistant"
-                                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-700 to-accent-600 px-3 sm:px-4 min-h-[40px] text-sm font-medium text-white shadow-sm hover:from-primary-800 hover:to-accent-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+                                className="agent-cta inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-700 to-accent-600 px-3 sm:px-4 min-h-[40px] text-sm font-medium text-white shadow-sm hover:from-primary-800 hover:to-accent-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
                             >
                                 <Sparkles className="w-4 h-4" aria-hidden="true" />
                                 <span className="hidden sm:inline">Assistant</span>
@@ -35,7 +35,7 @@ const Header = ({ user, onToggleSidebar, onLogout }) => {
                                 to="/agent/bulk"
                                 title="Create many invoices at once"
                                 aria-label="Open bulk invoices"
-                                className="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-700 to-accent-600 px-3 sm:px-4 min-h-[40px] text-sm font-medium text-white shadow-sm hover:from-primary-800 hover:to-accent-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
+                                className="agent-cta inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-primary-700 to-accent-600 px-3 sm:px-4 min-h-[40px] text-sm font-medium text-white shadow-sm hover:from-primary-800 hover:to-accent-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 focus-visible:ring-offset-2"
                             >
                                 <ReceiptText className="w-4 h-4" aria-hidden="true" />
                                 <span className="hidden sm:inline">Bulk invoices</span>

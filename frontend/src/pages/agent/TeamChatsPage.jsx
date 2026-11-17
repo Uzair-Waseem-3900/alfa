@@ -11,7 +11,7 @@ const when = (iso) => format(new Date(iso), 'd MMM yyyy, h:mm a');
 
 const LoadMore = ({ onClick, busy }) => (
     <button type="button" onClick={onClick} disabled={busy}
-        className="w-full flex items-center justify-center gap-2 rounded-lg min-h-[44px] text-sm font-medium text-primary-700 hover:bg-neutral-100 cursor-pointer disabled:opacity-60">
+        className="agent-press w-full flex items-center justify-center gap-2 rounded-lg min-h-[44px] text-sm font-medium text-primary-700 hover:bg-neutral-100 cursor-pointer disabled:opacity-60">
         {busy && <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />}
         Show more
     </button>
@@ -27,7 +27,7 @@ const Skeleton = () => (
 
 const Row = ({ onClick, active, icon: Icon, title, subtitle, trailing }) => (
     <button type="button" onClick={onClick} aria-current={active ? 'page' : undefined}
-        className={`w-full flex items-center gap-3 px-3 min-h-[56px] text-left rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 ${active ? 'bg-primary-100/70' : 'hover:bg-neutral-100'}`}>
+        className={`agent-press w-full flex items-center gap-3 px-3 min-h-[56px] text-left rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 ${active ? 'bg-primary-100/70' : 'hover:bg-neutral-100'}`}>
         <Icon className="w-5 h-5 flex-shrink-0 text-neutral-400" aria-hidden="true" />
         <span className="flex-1 min-w-0">
             <span className="block truncate text-sm font-medium text-neutral-800">{title}</span>
@@ -67,7 +67,7 @@ const TeamChatsPage = () => {
             <aside className={`${chatId ? 'hidden md:flex' : 'flex'} w-full md:w-80 flex-shrink-0 flex-col border-r border-neutral-200 bg-neutral-50`}>
                 <header className="flex-shrink-0 h-14 flex items-center gap-2 px-2 border-b border-neutral-200 bg-white">
                     <Link to={back} aria-label={`Back to ${backLabel}`}
-                        className="inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium text-primary-700 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
+                        className="agent-press inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium text-primary-700 hover:bg-primary-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
                         <ArrowLeft className="w-4 h-4" aria-hidden="true" /> {chatId ? 'All users' : backLabel}
                     </Link>
                     <h1 className="flex-1 min-w-0 truncate text-sm font-semibold text-neutral-900 text-right pr-2">
@@ -102,7 +102,7 @@ const TeamChatsPage = () => {
             {/* ── conversation (read only) ─────────────────────────────────── */}
             <section className={`${chatId ? 'flex' : 'hidden md:flex'} flex-1 min-w-0 flex-col`}>
                 <header className="flex-shrink-0 h-14 flex items-center gap-2 px-2 sm:px-4 border-b border-neutral-200 bg-white">
-                    <Link to={back} aria-label="Back" className="md:hidden w-11 h-11 flex items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100">
+                    <Link to={back} aria-label="Back" className="agent-press md:hidden w-11 h-11 flex items-center justify-center rounded-lg text-neutral-600 hover:bg-neutral-100">
                         <ArrowLeft className="w-5 h-5" />
                     </Link>
                     <div className="flex-1 min-w-0 leading-tight">
@@ -110,7 +110,7 @@ const TeamChatsPage = () => {
                         {convo.owner && <p className="truncate text-xs text-neutral-500">{convo.owner.name} · {convo.owner.email}</p>}
                     </div>
                     <Link to="/dashboard"
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 min-h-[44px] text-sm font-medium text-primary-700 hover:bg-primary-100">
+                        className="agent-press inline-flex items-center gap-1.5 rounded-lg border border-primary-200 bg-primary-50 px-3 min-h-[44px] text-sm font-medium text-primary-700 hover:bg-primary-100">
                         <span className="sm:hidden">Back</span><span className="hidden sm:inline">Back to software</span>
                     </Link>
                 </header>

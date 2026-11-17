@@ -160,7 +160,7 @@ const BulkRow = ({ row, busy, readOnly = false, onAnswer, onSkip, onRetry }) => 
                         <div className="flex flex-wrap gap-2">
                             {row.options.map((opt) => (
                                 <button key={opt} type="button" disabled={busy} onClick={() => send(opt)}
-                                    className={`${BTN} border border-primary-200 bg-primary-50 text-primary-800 hover:bg-primary-100 text-left`}>
+                                    className={`agent-press ${BTN} border border-primary-200 bg-primary-50 text-primary-800 hover:bg-primary-100 text-left`}>
                                     {opt}
                                 </button>
                             ))}
@@ -172,12 +172,12 @@ const BulkRow = ({ row, busy, readOnly = false, onAnswer, onSkip, onRetry }) => 
                             placeholder="Type your answer…" disabled={busy}
                             className="flex-1 min-w-0 rounded-lg border border-neutral-300 bg-white px-3 min-h-[44px] text-base focus:outline-none focus:ring-2 focus:ring-accent-500/40 focus:border-accent-500" />
                         <button type="submit" disabled={busy || !text.trim()} aria-label="Send answer"
-                            className={`${BTN} bg-primary-700 text-white hover:bg-primary-800`}>
+                            className={`agent-press ${BTN} bg-primary-700 text-white hover:bg-primary-800`}>
                             {busy ? <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" /> : <Send className="w-4 h-4" />}
                         </button>
                     </form>
                     <button type="button" disabled={busy} onClick={() => onSkip(row.id)}
-                        className={`${BTN} text-neutral-600 hover:bg-neutral-100`}>
+                        className={`agent-press ${BTN} text-neutral-600 hover:bg-neutral-100`}>
                         I will do it myself
                     </button>
                 </div>
@@ -194,11 +194,11 @@ const BulkRow = ({ row, busy, readOnly = false, onAnswer, onSkip, onRetry }) => 
                     )}
                     <div className="flex flex-wrap gap-2">
                         <button type="button" disabled={busy} onClick={() => onRetry(row.id)}
-                            className={`${BTN} border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50`}>
+                            className={`agent-press ${BTN} border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50`}>
                             <RotateCw className="w-4 h-4" aria-hidden="true" /> Retry
                         </button>
                         <button type="button" disabled={busy} onClick={() => onSkip(row.id)}
-                            className={`${BTN} text-neutral-600 hover:bg-neutral-100`}>
+                            className={`agent-press ${BTN} text-neutral-600 hover:bg-neutral-100`}>
                             I will do it myself
                         </button>
                     </div>

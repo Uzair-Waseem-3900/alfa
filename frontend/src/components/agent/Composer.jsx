@@ -35,10 +35,12 @@ const Composer = ({ onSend, disabled, busy, assistantName }) => {
     const nearLimit = value.length > MAX_CHARS * 0.8;
 
     return (
-        <div className="px-3 sm:px-4 pt-2 pb-3 bg-gradient-to-t from-white via-white to-white/0">
+        <motion.div className="px-3 sm:px-4 pt-2 pb-3 bg-gradient-to-t from-white via-white to-white/0"
+            initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1], delay: 0.12 }}>
             <form
                 onSubmit={(e) => { e.preventDefault(); submit(); }}
-                className="max-w-3xl mx-auto flex items-end gap-2 rounded-2xl border border-neutral-300 bg-white p-2 shadow-sm transition-shadow focus-within:border-accent-500 focus-within:ring-2 focus-within:ring-accent-500/25"
+                className="max-w-3xl mx-auto flex items-end gap-2 rounded-2xl border border-neutral-300 bg-white p-2 shadow-sm transition-all duration-300 focus-within:border-accent-500 focus-within:shadow-lg focus-within:shadow-accent-500/10 focus-within:ring-4 focus-within:ring-accent-500/15"
             >
                 <label htmlFor="agent-composer" className="sr-only">Message {assistantName}</label>
                 <textarea
@@ -111,7 +113,7 @@ const Composer = ({ onSend, disabled, busy, assistantName }) => {
                 </AnimatePresence>
                 Answers come from your live data and are internal estimates, not certified figures. Check anything important.
             </p>
-        </div>
+        </motion.div>
     );
 };
 

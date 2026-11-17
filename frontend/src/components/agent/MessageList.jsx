@@ -4,8 +4,11 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowDown, Loader2 } from 'lucide-react';
 import MessageBubble from './MessageBubble';
 import InlineAlert from '../ui/InlineAlert';
+import { EASE_OUT } from '../../utils/motion';
 
 const STICK_THRESHOLD_PX = 120;
+// Optimistic ids ('u-…' / 'a-…') are this session's live turn; anything else is already stored.
+const isLive = (id) => /^[ua]-\d+$/.test(String(id));
 
 const MessageList = ({
     messages, assistantName, loadingHistory, historyError,
@@ -62,10 +65,10 @@ const MessageList = ({
                     <div className="max-w-3xl mx-auto px-4 py-8 space-y-6" aria-hidden="true">
                         {[60, 85, 45].map((w, i) => (
                             <div key={i} className="flex gap-3">
-                                <div className="w-8 h-8 rounded-full bg-neutral-200 animate-pulse motion-reduce:animate-none" />
+                                <div className="w-8 h-8 rounded-full bg-gradient-to-r from-neutral-200 via-neutral-100 to-neutral-200 agent-sheen-border" />
                                 <div className="flex-1 space-y-2 pt-1">
-                                    <div className="h-3 rounded bg-neutral-200 animate-pulse motion-reduce:animate-none" style={{ width: `${w}%` }} />
-                                    <div className="h-3 rounded bg-neutral-100 animate-pulse motion-reduce:animate-none" style={{ width: `${w - 20}%` }} />
+                                    <div className="h-3 rounded bg-gradient-to-r from-neutral-200 via-neutral-100 to-neutral-200 agent-sheen-border" style={{ width: `${w}%` }} />
+                                    <div className="h-3 rounded bg-gradient-to-r from-neutral-100 via-neutral-50 to-neutral-100 agent-sheen-border" style={{ width: `${w - 20}%` }} />
                                 </div>
                             </div>
                         ))}
@@ -77,7 +80,13 @@ const MessageList = ({
                 ) : messages.length === 0 ? (
                     children
                 ) : (
-                    <div className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+                    <motion.div
+                        key={resetKey}
+                        className="max-w-3xl mx-auto px-4 py-6 space-y-6"
+                        initial={{ opacity: 0, y: 12 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.4, ease: EASE_OUT }}
+                    >
                         {hasEarlier && (
                             <div className="flex justify-center">
                                 <motion.button
@@ -97,10 +106,11 @@ const MessageList = ({
                                 key={m.id}
                                 message={m}
                                 assistantName={assistantName}
+                                instant={!isLive(m.id)}
                                 onRetry={m === last && m.status === 'error' && lastUserText ? () => onRetryLast(lastUserText) : undefined}
                             />
                         ))}
-                    </div>
+                    </motion.div>
                 )}
             </div>
 

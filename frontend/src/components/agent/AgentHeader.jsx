@@ -1,7 +1,7 @@
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
-import { ArrowLeft, PanelLeft, SquarePen } from 'lucide-react';
+import { ArrowLeft, PanelLeft, ReceiptText, Sparkles, SquarePen } from 'lucide-react';
 import { AssistantAvatar } from './MessageBubble';
 
 // ─── variants ──────────────────────────────────────────────────────────────
@@ -19,11 +19,47 @@ const itemFade = {
     show:   { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 380, damping: 26 } },
 };
 
+// ─── Assistant | Bulk switch ───────────────────────────────────────────────
+// The two pages are separate routes, so the header is rebuilt on every switch. The highlight therefore starts
+// where it was on the PREVIOUS page (module memory) and springs to its new slot: it reads as one control sliding.
+let lastMode = null;
+const TABS = [
+    { key: 'assistant', to: '/agent',      label: 'Assistant',     icon: Sparkles,    title: 'Ask the assistant about your business' },
+    { key: 'bulk',      to: '/agent/bulk', label: 'Bulk invoices', icon: ReceiptText, title: 'Create many invoices at once' },
+];
+
+const ModeSwitch = ({ mode }) => {
+    const from = lastMode && lastMode !== mode ? (lastMode === 'bulk' ? '100%' : '0%') : (mode === 'bulk' ? '100%' : '0%');
+    lastMode = mode;
+    return (
+        <nav aria-label="Assistant mode" className="relative grid grid-cols-2 rounded-xl bg-neutral-100 p-0.5">
+            <motion.span
+                aria-hidden="true"
+                className="absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-[10px] bg-white shadow-sm ring-1 ring-neutral-200"
+                initial={{ x: from }}
+                animate={{ x: mode === 'bulk' ? '100%' : '0%' }}
+                transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+            />
+            {TABS.map(({ key, to, label, icon: Icon, title }) => (
+                <Link key={key} to={to} title={title} aria-current={key === mode ? 'page' : undefined}
+                    aria-label={`Switch to ${label}`}
+                    className={`relative z-10 inline-flex items-center justify-center gap-1.5 rounded-[10px] px-2.5 sm:px-3 min-h-[40px] text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500 ${
+                        key === mode ? 'text-primary-800' : 'text-neutral-500 hover:text-neutral-800'}`}>
+                    <Icon className="w-4 h-4" aria-hidden="true" />
+                    <span className="hidden sm:inline">{label}</span>
+                </Link>
+            ))}
+        </nav>
+    );
+};
+
+ModeSwitch.propTypes = { mode: PropTypes.oneOf(['assistant', 'bulk']).isRequired };
+
 // ─── AgentHeader ───────────────────────────────────────────────────────────
 
 const AgentHeader = ({
     assistantName, sidebarOpen, onToggleSidebar, onNewChat,
-    subtitle = 'Business assistant', newLabel = 'New chat', actions = null,
+    subtitle = 'Business assistant', busy = false, newLabel = 'New chat', actions = null, mode = null,
 }) => (
     <motion.header
         className="flex-shrink-0 h-14 flex items-center gap-1 sm:gap-2 px-2 sm:px-4 border-b border-neutral-200 bg-white/90 backdrop-blur"
@@ -59,7 +95,7 @@ const AgentHeader = ({
             variants={itemFade}
             className="flex items-center gap-2.5 min-w-0"
         >
-            <AssistantAvatar />
+            <AssistantAvatar active={busy} />
             <div className="min-w-0 leading-tight">
                 <h1 className="text-sm font-semibold text-neutral-900 truncate">{assistantName}</h1>
                 <p className="hidden sm:block text-xs text-neutral-500">{subtitle}</p>
@@ -93,6 +129,8 @@ const AgentHeader = ({
                 <SquarePen className="w-5 h-5" />
             </motion.button>
         </motion.div>
+
+        {mode && <motion.div variants={itemFade}><ModeSwitch mode={mode} /></motion.div>}
 
         {actions}
 
@@ -131,6 +169,8 @@ AgentHeader.propTypes = {
     subtitle:        PropTypes.string,
     newLabel:        PropTypes.string,
     actions:         PropTypes.node,
+    busy:            PropTypes.bool,
+    mode:            PropTypes.oneOf(['assistant', 'bulk']),
 };
 
 export default AgentHeader;

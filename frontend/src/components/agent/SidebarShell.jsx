@@ -44,7 +44,9 @@ const SidebarShell = ({ open, onClose, label, children }) => (
             className="hidden md:flex flex-col bg-neutral-50 border-r border-neutral-200 overflow-hidden flex-shrink-0"
         >
             {/* full width inside, so text does not reflow while the panel collapses */}
-            <div className="w-72 flex flex-col h-full">{children}</div>
+            <motion.div className="w-72 flex flex-col h-full"
+                initial={{ opacity: 0, x: -24 }} animate={{ opacity: 1, x: 0 }}
+                transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1], delay: 0.05 }}>{children}</motion.div>
         </motion.aside>
     </>
 );

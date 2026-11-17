@@ -10,7 +10,10 @@ import PropTypes from 'prop-types';
  * page, sized to content, clipped). Never add transform, filter, will-change,
  * perspective, contain or overflow here.
  */
-const DURATION = 0.18;
+// Short on purpose: the premium part of a page switch is each screen assembling itself (header drops, history
+// slides, body rises, mode switch glides); this only gets the old screen out of the way.
+const ENTER = 0.22;
+const EXIT = 0.12;
 
 const PageFade = ({ children }) => {
     const reduce = useReducedMotion();
@@ -18,8 +21,8 @@ const PageFade = ({ children }) => {
         <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: reduce ? 0 : DURATION, ease: 'easeOut' }}
+            exit={{ opacity: 0, transition: { duration: reduce ? 0 : EXIT, ease: 'easeIn' } }}
+            transition={{ duration: reduce ? 0 : ENTER, ease: 'easeOut' }}
         >
             {children}
         </motion.div>

@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { AnimatePresence } from 'framer-motion';
+import { AnimatePresence, MotionConfig } from 'framer-motion';
 import PageFade from './components/ui/PageFade';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
@@ -189,6 +189,7 @@ const AppContent = () => {
   const routeGroup = agentMatch ? `agent-${agentMatch[1] || 'chat'}` : 'app';
 
   return (
+    <MotionConfig reducedMotion="user">
     <AnimatePresence mode="wait" initial={false}>
       <PageFade key={routeGroup}>
       <Routes location={location}>
@@ -1260,6 +1261,7 @@ const AppContent = () => {
       </Routes>
       </PageFade>
     </AnimatePresence>
+    </MotionConfig>
   );
 };
 

@@ -1,30 +1,56 @@
 import PropTypes from 'prop-types';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Check, Loader2 } from 'lucide-react';
+import { SPRING_POP } from '../../utils/motion';
 
-// ─── Variants ──────────────────────────────────────────────────────────────
+// A tool call, shown as a pill:
+//   running — a light travels around a gradient border, the label shimmers, a
+//             soft ring "breathes" and a live dot ripples
+//   done    — the tick draws itself in once, a single ripple confirms it, and the
+//             pill settles into a quiet neutral chip
+// All loops are CSS (index.css) so they cost nothing while tokens stream in.
 
 const chipVariants = {
-    hidden: { opacity: 0, scale: 0.75, y: 6 },
-    show: {
-        opacity: 1, scale: 1, y: 0,
-        transition: { type: 'spring', stiffness: 480, damping: 26 },
-    },
-    exit: {
-        opacity: 0, scale: 0.85, y: -4,
-        transition: { duration: 0.18, ease: 'easeIn' },
-    },
+    hidden: { opacity: 0, scale: 0.8, x: -10 },
+    show:   { opacity: 1, scale: 1,   x: 0, transition: SPRING_POP },
+    exit:   { opacity: 0, scale: 0.9, transition: { duration: 0.15, ease: 'easeIn' } },
 };
 
-const iconVariants = {
-    hidden: { opacity: 0, scale: 0.4, rotate: -30 },
-    show: {
-        opacity: 1, scale: 1, rotate: 0,
-        transition: { type: 'spring', stiffness: 600, damping: 22 },
-    },
-};
+const RunningDot = () => (
+    <span className="relative flex h-2.5 w-2.5 flex-shrink-0" aria-hidden="true">
+        <span className="agent-ripple absolute inset-0 rounded-full bg-accent-500" />
+        <span className="relative h-2.5 w-2.5 rounded-full bg-accent-600" />
+    </span>
+);
 
-// ─── ToolSteps ─────────────────────────────────────────────────────────────
+const DoneTick = () => (
+    <span className="relative flex h-4 w-4 flex-shrink-0 items-center justify-center" aria-hidden="true">
+        {/* one-shot confirmation ripple */}
+        <motion.span
+            className="absolute inset-0 rounded-full bg-success-500"
+            initial={{ scale: 0.6, opacity: 0.5 }}
+            animate={{ scale: 2.2, opacity: 0 }}
+            transition={{ duration: 0.7, ease: 'easeOut' }}
+        />
+        <motion.span
+            className="absolute inset-0 rounded-full bg-success-50"
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={SPRING_POP}
+        />
+        <svg viewBox="0 0 16 16" className="relative h-3 w-3 text-success-600" fill="none">
+            <motion.path
+                d="M3.5 8.5l3 3 6-7"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                initial={{ pathLength: 0 }}
+                animate={{ pathLength: 1 }}
+                transition={{ duration: 0.32, ease: 'easeOut', delay: 0.08 }}
+            />
+        </svg>
+    </span>
+);
 
 const ToolSteps = ({ steps }) => {
     if (!steps?.length) return null;
@@ -40,37 +66,20 @@ const ToolSteps = ({ steps }) => {
                         animate="show"
                         exit="exit"
                         layout
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium ${
+                        className={`rounded-full ${
                             step.done
-                                ? 'border-neutral-200 bg-neutral-50 text-neutral-500'
-                                : 'border-accent-200 bg-accent-50 text-accent-700'
+                                ? 'p-px bg-neutral-200'
+                                : 'p-px bg-gradient-to-r from-accent-200 via-accent-500 to-accent-200 agent-sheen-border agent-breathe'
                         }`}
                     >
-                        {/* Icon swaps smoothly between spinner and check */}
-                        <AnimatePresence mode="wait" initial={false}>
-                            {step.done ? (
-                                <motion.span
-                                    key="done"
-                                    variants={iconVariants}
-                                    initial="hidden"
-                                    animate="show"
-                                >
-                                    <Check className="w-3.5 h-3.5 text-success-600" aria-hidden="true" />
-                                </motion.span>
-                            ) : (
-                                <motion.span
-                                    key="spinning"
-                                    initial={{ opacity: 0 }}
-                                    animate={{ opacity: 1 }}
-                                    exit={{ opacity: 0 }}
-                                    transition={{ duration: 0.15 }}
-                                >
-                                    <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
-                                </motion.span>
-                            )}
-                        </AnimatePresence>
-
-                        {step.label}
+                        <span className={`flex items-center gap-2 rounded-full bg-white py-1 pl-2.5 pr-3 text-xs font-medium ${
+                            step.done ? 'text-neutral-500' : ''
+                        }`}>
+                            {step.done ? <DoneTick /> : <RunningDot />}
+                            <span className={step.done ? '' : 'agent-sheen-text bg-gradient-to-r from-neutral-500 via-accent-600 to-neutral-500'}>
+                                {step.label}
+                            </span>
+                        </span>
                     </motion.li>
                 ))}
             </AnimatePresence>

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { ReceiptText } from 'lucide-react';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useAgentChats, useChatConversation } from '../../hooks/useAgent';
 import AgentHeader from '../../components/agent/AgentHeader';
@@ -103,13 +102,8 @@ const AgentPage = () => {
                     sidebarOpen={sidebarOpen}
                     onToggleSidebar={() => setSidebarOpen((o) => !o)}
                     onNewChat={handleNewChat}
-                    actions={(
-                        <Link to="/agent/bulk" aria-label="Switch to bulk invoices" title="Create many invoices at once"
-                            className="inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
-                            <ReceiptText className="w-4 h-4" aria-hidden="true" />
-                            <span className="hidden sm:inline">Bulk invoices</span>
-                        </Link>
-                    )}
+                    mode="assistant"
+                    busy={busy}
                 />
 
                 <MessageList

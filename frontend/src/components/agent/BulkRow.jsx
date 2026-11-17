@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
+import { AnimatePresence, motion } from 'framer-motion';
+import { rise, SPRING_POP } from '../../utils/motion';
 import {
     AlertTriangle, Ban, CheckCircle2, Clock, ExternalLink, Loader2, MinusCircle, RotateCw, Send, XCircle,
 } from 'lucide-react';
@@ -20,11 +22,17 @@ const STATUS = {
 export const StatusChip = ({ status }) => {
     const cfg = STATUS[status] || STATUS.queued;
     const Icon = cfg.icon;
+    // Re-keyed per status, so a status change is a short crossfade-pop instead of a hard text swap.
     return (
-        <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${cfg.chip}`}>
-            <Icon className={`w-3.5 h-3.5 ${cfg.spin ? 'animate-spin motion-reduce:animate-none' : ''}`} aria-hidden="true" />
-            {cfg.label}
-        </span>
+        <AnimatePresence mode="wait" initial={false}>
+            <motion.span key={status}
+                initial={{ opacity: 0, scale: 0.85, y: 4 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.1 } }} transition={SPRING_POP}
+                className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ${cfg.chip}`}>
+                <Icon className={`w-3.5 h-3.5 ${cfg.spin ? 'animate-spin motion-reduce:animate-none' : ''}`} aria-hidden="true" />
+                {cfg.label}
+            </motion.span>
+        </AnimatePresence>
     );
 };
 
@@ -34,7 +42,8 @@ const rs = (v) => (v == null ? 'N/A' : `Rs ${Number(v).toLocaleString('en-PK', {
 
 // What was created: every line (quantity x the rate charged per unit) and the grand total, as billing calculated them.
 const DraftSummary = ({ summary }) => (
-    <div className="ml-10 rounded-xl border border-neutral-200 bg-neutral-50 overflow-hidden text-sm">
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }}
+        className="ml-10 rounded-xl border border-neutral-200 bg-neutral-50 overflow-hidden text-sm">
         <div className="overflow-x-auto">
             <table className="w-full">
                 <caption className="sr-only">Items on this draft invoice</caption>
@@ -74,7 +83,7 @@ const DraftSummary = ({ summary }) => (
                 <span>Grand total</span><span className="tabular-nums">{rs(summary.grand_total)}</span>
             </p>
         </div>
-    </div>
+    </motion.div>
 );
 
 DraftSummary.propTypes = {
@@ -95,7 +104,20 @@ const BulkRow = ({ row, busy, readOnly = false, onAnswer, onSkip, onRetry }) => 
     };
 
     return (
-        <li className="rounded-2xl border border-neutral-200 bg-white p-3 sm:p-4 space-y-3">
+        <motion.li variants={rise} layout="position"
+            className={`relative rounded-2xl border bg-white p-3 sm:p-4 space-y-3 transition-colors duration-500 ${
+                row.status === 'processing' ? 'border-accent-300 agent-breathe'
+                : row.status === 'needs_attention' ? 'border-warning-500/60'
+                : row.status === 'done' ? 'border-success-500/30'
+                : 'border-neutral-200'}`}>
+            {/* One-time soft flash when a row lands as a created draft */}
+            <AnimatePresence>
+                {row.status === 'done' && (
+                    <motion.span key="done-flash" aria-hidden="true"
+                        className="pointer-events-none absolute inset-0 rounded-2xl bg-success-500"
+                        initial={{ opacity: 0.14 }} animate={{ opacity: 0 }} transition={{ duration: 1.1 }} />
+                )}
+            </AnimatePresence>
             <div className="flex items-start gap-3">
                 <span className="flex-shrink-0 w-7 h-7 rounded-full bg-neutral-100 text-neutral-600 text-xs font-semibold flex items-center justify-center" aria-hidden="true">
                     {row.position}
@@ -182,7 +204,7 @@ const BulkRow = ({ row, busy, readOnly = false, onAnswer, onSkip, onRetry }) => 
                     </div>
                 </div>
             )}
-        </li>
+        </motion.li>
     );
 };
 

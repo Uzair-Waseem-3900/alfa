@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
-import { motion } from 'framer-motion';
-import { Loader2, Plus, Sparkles, Square, Users, X } from 'lucide-react';
+import PropTypes from 'prop-types';
+import { Navigate, useNavigate, useParams } from 'react-router-dom';
+import { AnimatePresence, motion } from 'framer-motion';
+import { Loader2, Plus, Square, Users, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { bulkApi } from '../../services/agentApi';
@@ -15,6 +16,7 @@ import BulkCompose from '../../components/agent/BulkCompose';
 import BulkRow, { StatusChip } from '../../components/agent/BulkRow';
 import ConfirmDialog from '../../components/ui/ConfirmDialog';
 import InlineAlert from '../../components/ui/InlineAlert';
+import { EASE_OUT, SPRING_SOFT, stagger } from '../../utils/motion';
 
 // Staggered entrance of the history entries: same as the assistant's chat list.
 const listContainer = { hidden: {}, show: { transition: { staggerChildren: 0.045 } } };
@@ -32,6 +34,34 @@ const liveCounts = (items) => items.reduce((acc, r) => ({
     attention: acc.attention + (r.status === 'needs_attention' ? 1 : 0),
     working: acc.working + (r.status === 'queued' || r.status === 'processing' ? 1 : 0),
 }), { total: 0, done: 0, attention: 0, working: 0 });
+
+// Progress bar for the open batch: the fill glides to each new value, a light sweeps over it while rows are still
+// being worked, and the whole bar turns green with a soft flash when the last one lands.
+const BatchProgress = ({ done, total, working }) => {
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const complete = total > 0 && done === total;
+    return (
+        <div role="progressbar" aria-valuemin={0} aria-valuemax={total} aria-valuenow={done} aria-label="Invoices created"
+            className="relative h-2 overflow-hidden rounded-full bg-neutral-100">
+            <motion.div
+                className={`relative h-full rounded-full ${complete ? 'bg-success-500' : 'bg-gradient-to-r from-primary-600 to-accent-500'}`}
+                initial={false}
+                animate={{ width: `${pct}%` }}
+                transition={SPRING_SOFT}
+            >
+                {working && !complete && <span className="agent-sheen-border absolute inset-0 rounded-full bg-gradient-to-r from-transparent via-white/50 to-transparent" />}
+            </motion.div>
+            <AnimatePresence>
+                {complete && (
+                    <motion.span key="flash" className="absolute inset-0 rounded-full bg-success-500"
+                        initial={{ opacity: 0.5 }} animate={{ opacity: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.9 }} />
+                )}
+            </AnimatePresence>
+        </div>
+    );
+};
+
+BatchProgress.propTypes = { done: PropTypes.number.isRequired, total: PropTypes.number.isRequired, working: PropTypes.bool };
 
 // Bulk invoice creation: many prompts, one DRAFT invoice each, worked one after another on the server.
 //   /agent/bulk            -> add prompts and start
@@ -189,13 +219,8 @@ const BulkInvoicesPage = () => {
                     sidebarOpen={sidebarOpen}
                     onToggleSidebar={() => setSidebarOpen((o) => !o)}
                     onNewChat={() => goto('/agent/bulk')}
-                    actions={(
-                        <Link to="/agent" aria-label="Switch to the assistant" title="Ask the assistant about your business"
-                            className="inline-flex items-center gap-1.5 rounded-lg px-3 min-h-[44px] text-sm font-medium text-neutral-600 hover:bg-neutral-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-500">
-                            <Sparkles className="w-4 h-4" aria-hidden="true" />
-                            <span className="hidden sm:inline">Assistant</span>
-                        </Link>
-                    )}
+                    mode="bulk"
+                    busy={working > 0}
                 />
 
                 {!batchId ? (
@@ -208,7 +233,8 @@ const BulkInvoicesPage = () => {
                     <div className="max-w-3xl w-full mx-auto px-4 py-8"><InlineAlert message={view.error} onRetry={view.reload} /></div>
                 ) : batch && (
                     <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
-                        <div className="max-w-3xl mx-auto px-4 py-6 space-y-4">
+                        <motion.div key={batch.id} className="max-w-3xl mx-auto px-4 py-6 space-y-4"
+                            initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: EASE_OUT }}>
                             {batch.title && <h2 className="text-lg font-semibold text-neutral-900 break-words">{batch.title}</h2>}
                             <div className="flex flex-wrap items-center gap-3">
                                 <StatusChip status={BATCH_STATUS_CHIP[batch.status] || 'queued'} />
@@ -225,6 +251,8 @@ const BulkInvoicesPage = () => {
                                 )}
                             </div>
 
+                            <BatchProgress done={counts.done || 0} total={batch.items.length} working={working > 0} />
+
                             {working > 0 && (
                                 <InlineAlert variant="info" message="You can leave this page. The invoices keep being created and you will find the results here." />
                             )}
@@ -233,13 +261,13 @@ const BulkInvoicesPage = () => {
                                     message="Answer each question below. Only that invoice is tried again, or choose “I will do it myself”." />
                             )}
 
-                            <ul className="space-y-3">
+                            <motion.ul className="space-y-3" variants={stagger(0.04, 0.05)} initial="hidden" animate="show">
                                 {batch.items.map((row) => (
                                     <BulkRow key={row.id} row={row} busy={!!view.busyRows[row.id]}
                                         onAnswer={view.answer} onSkip={view.skip} onRetry={view.retry} />
                                 ))}
-                            </ul>
-                        </div>
+                            </motion.ul>
+                        </motion.div>
                     </div>
                 )}
             </div>

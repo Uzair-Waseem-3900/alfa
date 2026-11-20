@@ -4,7 +4,7 @@ import os
 from datetime import timedelta
 from urllib.parse import urlparse, parse_qs
 BASE_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(BASE_DIR / '.env.pro')
+load_dotenv(BASE_DIR / '.env.production')
 SECRET_KEY = os.getenv("SECRET_KEY")
 # uvicorn backend.asgi:application --port 8000 --reload
 # celery -A backend worker -Q agent -l info
